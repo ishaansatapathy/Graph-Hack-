@@ -7,23 +7,27 @@ import { trpc } from "~/lib/trpc";
 type GNode = { id: string; label: string; title: string; properties: Record<string, unknown> };
 type GEdge = { source: string; target: string; type: string };
 type Stats = { nodeCount: number; relCount: number; labels: { label: string; count: number }[] };
+type MemoryMsg = { id: string; role: string; content: string; createdAt: string };
 
 const COLORS: Record<string, string> = {
-  Repository: "#a78bfa",
-  File: "#60a5fa",
-  Function: "#34d399",
-  Test: "#fbbf24",
-  Commit: "#f472b6",
-  Issue: "#fb923c",
-  Discussion: "#22d3ee",
-  Decision: "#c084fc",
-  Conflict: "#f87171",
+  Repository:   "#a78bfa",
+  File:         "#60a5fa",
+  Function:     "#34d399",
+  Test:         "#fbbf24",
+  Commit:       "#f472b6",
+  Issue:        "#fb923c",
+  Discussion:   "#22d3ee",
+  Decision:     "#c084fc",
+  Conflict:     "#f87171",
+  SlackMessage: "#4ade80",
+  SlackChannel: "#2dd4bf",
+  Person:       "#e879f9",
+  Label:        "#facc15",
 };
 
 const W = 900;
 const H = 520;
 
-/** Group-by-label ring layout: each label gets an angular sector. */
 function layout(nodes: GNode[]) {
   const groups = [...new Set(nodes.map((n) => n.label))];
   const pos = new Map<string, { x: number; y: number }>();
@@ -42,6 +46,7 @@ function layout(nodes: GNode[]) {
 }
 
 export default function GraphAgentPage() {
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [graph, setGraph] = useState<{ nodes: GNode[]; edges: GEdge[] }>({ nodes: [], edges: [] });
   const [selected, setSelected] = useState<GNode | null>(null);
@@ -52,31 +57,54 @@ export default function GraphAgentPage() {
   const [answer, setAnswer] = useState("");
   const [cypher, setCypher] = useState<string[]>([]);
   const [asking, setAsking] = useState(false);
+  const [evidenceCount, setEvidenceCount] = useState(0);
 
   const [rawCypher, setRawCypher] = useState("MATCH (c:Commit)-[:REFERENCES]->(i:Issue) RETURN c.sha, i.key");
   const [rawOut, setRawOut] = useState("");
 
+  const [memory, setMemory] = useState<MemoryMsg[]>([]);
+  const [showMemory, setShowMemory] = useState(false);
+  const [clearingMemory, setClearingMemory] = useState(false);
+
+  // Resolve workspace on mount
+  useEffect(() => {
+    void trpc.workspace.current.query({}).then((ws) => setWorkspaceId(ws.id)).catch(() => {});
+  }, []);
+
   const refresh = useCallback(async () => {
+    if (!workspaceId) return;
     try {
       setError("");
-      const [s, g] = await Promise.all([trpc.graph.stats.query(), trpc.graph.subgraph.query({ limit: 200 })]);
+      const [s, g] = await Promise.all([
+        trpc.graph.stats.query({ workspaceId }),
+        trpc.graph.subgraph.query({ workspaceId, limit: 200 }),
+      ]);
       setStats(s as Stats);
       setGraph(g as { nodes: GNode[]; edges: GEdge[] });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not reach FalkorDB — run `npm run db:up`");
     }
-  }, []);
+  }, [workspaceId]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
+  const loadMemory = useCallback(async () => {
+    if (!workspaceId) return;
+    try {
+      const msgs = await trpc.graph.memory.list.query({ workspaceId });
+      setMemory((msgs ?? []) as MemoryMsg[]);
+    } catch { /* ignore */ }
+  }, [workspaceId]);
+
   const positions = useMemo(() => layout(graph.nodes), [graph.nodes]);
 
   async function seed() {
+    if (!workspaceId) return;
     setBusy(true);
     try {
-      await trpc.graph.seedDemo.mutate();
+      await trpc.graph.seedDemo.mutate({ workspaceId });
       setSelected(null);
       await refresh();
     } catch (err) {
@@ -88,14 +116,17 @@ export default function GraphAgentPage() {
 
   async function onAsk(e: React.FormEvent) {
     e.preventDefault();
-    if (!question.trim()) return;
+    if (!question.trim() || !workspaceId) return;
     setAsking(true);
     setAnswer("");
     setCypher([]);
+    setEvidenceCount(0);
     try {
-      const result = await trpc.graph.ask.mutate({ question: question.trim() });
-      setAnswer(result.answer);
-      setCypher(result.cypher);
+      const result = await trpc.graph.ask.mutate({ workspaceId, question: question.trim() });
+      setAnswer(result?.answer ?? "");
+      setCypher(result?.cypher ?? []);
+      setEvidenceCount(result?.evidenceCount ?? 0);
+      void loadMemory();
     } catch (err) {
       setAnswer(err instanceof Error ? err.message : "Request failed");
     } finally {
@@ -104,11 +135,25 @@ export default function GraphAgentPage() {
   }
 
   async function runRaw() {
+    if (!workspaceId) return;
     try {
-      const res = await trpc.graph.query.mutate({ cypher: rawCypher });
-      setRawOut(`// ${res.cypher}\n${JSON.stringify(res.rows, null, 2)}`);
+      const res = await trpc.graph.query.mutate({ workspaceId, cypher: rawCypher });
+      setRawOut(`// ${res?.cypher ?? rawCypher}\n${JSON.stringify(res?.rows, null, 2)}`);
     } catch (err) {
       setRawOut(err instanceof Error ? err.message : "Query failed");
+    }
+  }
+
+  async function clearMemory() {
+    if (!workspaceId) return;
+    setClearingMemory(true);
+    try {
+      await trpc.graph.memory.clear.mutate({ workspaceId });
+      setMemory([]);
+      setAnswer("");
+      setCypher([]);
+    } catch { /* ignore */ } finally {
+      setClearingMemory(false);
     }
   }
 
@@ -122,12 +167,21 @@ export default function GraphAgentPage() {
     return ids;
   }, [selected, graph.edges]);
 
+  if (!workspaceId) {
+    return <p className="app-muted">Loading workspace…</p>;
+  }
+
   return (
     <section className="app-section app-section--flat">
       <div className="app-graph-toolbar">
         <div className="app-graph-stats">
           <span className="app-pill app-pill--on">FalkorDB</span>
           <span>{stats ? `${stats.nodeCount} nodes · ${stats.relCount} relationships` : "…"}</span>
+          {stats && stats.labels.length > 0 ? (
+            <span className="app-muted" style={{ fontSize: "0.75rem" }}>
+              {stats.labels.slice(0, 4).map((l) => `${l.label}(${l.count})`).join(" · ")}
+            </span>
+          ) : null}
         </div>
         <button type="button" className="app-btn app-btn-small" disabled={busy} onClick={() => void seed()}>
           {busy ? "Loading…" : "Load demo graph"}
@@ -175,7 +229,7 @@ export default function GraphAgentPage() {
           })}
           {graph.nodes.length === 0 ? (
             <text x={W / 2} y={H / 2} textAnchor="middle" fill="#6b7280" fontSize={14}>
-              Graph is empty — click “Load demo graph”
+              Graph is empty — click "Load demo graph" or sync an integration
             </text>
           ) : null}
         </svg>
@@ -199,10 +253,11 @@ export default function GraphAgentPage() {
         </div>
       </div>
 
+      {/* ── GraphRAG ask ──────────────────────────────────────────────── */}
       <form onSubmit={(e) => void onAsk(e)} className="app-ask-form">
         <input
           className="app-input"
-          placeholder="Ask about a function, e.g. verifyToken…"
+          placeholder="Ask about a function, conflict, issue… e.g. verifyToken"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
         />
@@ -210,9 +265,15 @@ export default function GraphAgentPage() {
           {asking ? "Thinking…" : "Ask graph"}
         </button>
       </form>
+
       {answer ? (
         <div className="app-answer">
           <strong>GraphRAG context</strong>
+          {evidenceCount > 0 ? (
+            <span className="app-pill app-pill--on" style={{ marginLeft: "0.5rem", fontSize: "0.7rem" }}>
+              {evidenceCount} evidence nodes
+            </span>
+          ) : null}
           <pre className="app-cypher">{answer}</pre>
           {cypher.length > 0 ? (
             <>
@@ -223,6 +284,39 @@ export default function GraphAgentPage() {
         </div>
       ) : null}
 
+      {/* ── Agent memory ──────────────────────────────────────────────── */}
+      <div className="app-memory-bar">
+        <button
+          type="button"
+          className="app-btn-ghost app-btn-small"
+          onClick={() => { setShowMemory((v) => !v); if (!showMemory) void loadMemory(); }}
+        >
+          {showMemory ? "Hide memory" : `Agent memory (${memory.length} msgs)`}
+        </button>
+        {memory.length > 0 ? (
+          <button
+            type="button"
+            className="app-btn-ghost app-btn-small"
+            disabled={clearingMemory}
+            onClick={() => void clearMemory()}
+          >
+            {clearingMemory ? "Clearing…" : "Clear memory"}
+          </button>
+        ) : null}
+      </div>
+
+      {showMemory && memory.length > 0 ? (
+        <div className="app-memory-thread">
+          {memory.map((m) => (
+            <div key={m.id} className={`app-memory-msg app-memory-msg--${m.role}`}>
+              <span className="app-memory-role">{m.role}</span>
+              <pre className="app-memory-content">{m.content.slice(0, 300)}{m.content.length > 300 ? "…" : ""}</pre>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* ── Cypher console ───────────────────────────────────────────── */}
       <h3 className="app-section-title">Cypher console (read-only)</h3>
       <div className="app-ask-form">
         <input className="app-input" value={rawCypher} onChange={(e) => setRawCypher(e.target.value)} />

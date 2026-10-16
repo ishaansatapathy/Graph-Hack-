@@ -13,6 +13,16 @@ type IntegrationRow = {
   updatedAt: string | null;
 };
 
+type SyncRun = {
+  id: string;
+  provider: string;
+  status: "running" | "ok" | "error";
+  items: number;
+  message: string;
+  startedAt: string;
+  finishedAt: string | null;
+};
+
 const PROVIDER_TITLES: Record<Provider, string> = {
   github: "GitHub",
   jira: "Jira",
@@ -29,6 +39,8 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [syncRuns, setSyncRuns] = useState<SyncRun[]>([]);
+  const [syncing, setSyncing] = useState(false);
 
   const [githubToken, setGithubToken] = useState("");
   const [githubRepo, setGithubRepo] = useState("");
@@ -38,6 +50,8 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
   const [jiraEmail, setJiraEmail] = useState("");
   const [jiraToken, setJiraToken] = useState("");
   const [slackWebhook, setSlackWebhook] = useState("");
+  const [slackBotToken, setSlackBotToken] = useState("");
+  const [slackTeamDomain, setSlackTeamDomain] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,9 +65,19 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
     }
   }, [workspaceId]);
 
+  const loadRuns = useCallback(async () => {
+    try {
+      const runs = await trpc.graph.sync.runs.query({ workspaceId, limit: 8 });
+      setSyncRuns((runs ?? []) as SyncRun[]);
+    } catch {
+      /* ignore */
+    }
+  }, [workspaceId]);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadRuns();
+  }, [load, loadRuns]);
 
   useEffect(() => {
     void trpc.workspace.integrations.githubOnboarding
@@ -83,6 +107,22 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
     }
   }
 
+  async function syncToGraph(provider: "jira" | "slack") {
+    setSyncing(true);
+    setMessage(null);
+    try {
+      const result = await trpc.graph.sync.trigger.mutate({ workspaceId, provider });
+      setMessage({ tone: "ok", text: result?.message ?? `${provider} sync started` });
+      // Poll runs after short delay
+      setTimeout(() => void loadRuns(), 2000);
+      setTimeout(() => void loadRuns(), 6000);
+    } catch (err) {
+      setMessage({ tone: "err", text: err instanceof Error ? err.message : "Sync failed" });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function save(provider: Provider) {
     setBusy(true);
     setMessage(null);
@@ -109,15 +149,15 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
           apiToken: jiraToken,
         });
         setJiraToken("");
+        setMessage({ tone: "ok", text: "Jira saved — click 'Sync to graph' to ingest issues" });
       } else {
+        // Build merged config: Slack may optionally have a bot token for full sync
         await trpc.workspace.integrations.upsertSlack.mutate({
           workspaceId,
           webhookUrl: slackWebhook,
         });
         setSlackWebhook("");
-      }
-      if (provider !== "github") {
-        setMessage({ tone: "ok", text: `${PROVIDER_TITLES[provider]} saved` });
+        setMessage({ tone: "ok", text: "Slack saved — add a bot token for full message ingestion" });
       }
       await load();
     } catch (err) {
@@ -145,6 +185,8 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
     return <p className="app-muted">Loading integrations…</p>;
   }
 
+  const focusRuns = syncRuns.filter((r) => r.provider === focus);
+
   return (
     <div className="app-integrations">
       {message ? (
@@ -160,7 +202,7 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
             </span>
           </header>
           <p className="app-muted">
-            Evolvex-style: PAT + repo + webhook secret — we register the hook and ingest pushes to FalkorDB.
+            PAT + repo + webhook secret — we register the hook and ingest pushes into FalkorDB as Commit, File, and Function nodes.
           </p>
           {githubWebhookUrl ? (
             <p className="app-webhook-url">
@@ -203,7 +245,7 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
               disabled={busy || (!githubToken && !configured("github")) || !githubRepo || !githubWebhookSecret}
               onClick={() => void save("github")}
             >
-              Save & register webhook
+              Save &amp; register webhook
             </button>
             <button type="button" className="app-btn-ghost" disabled={busy || !configured("github")} onClick={() => void runTest("github")}>
               Test
@@ -223,7 +265,9 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
               {configured("jira") ? "Connected" : "Not connected"}
             </span>
           </header>
-          <p className="app-muted">Site URL + email + API token (Atlassian account settings).</p>
+          <p className="app-muted">
+            Site URL + email + API token. After saving, click <strong>Sync to graph</strong> to ingest Jira issues as graph nodes.
+          </p>
           <label className="app-field">
             <span>Site URL</span>
             <input
@@ -260,6 +304,14 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
             >
               Save
             </button>
+            <button
+              type="button"
+              className="app-btn"
+              disabled={busy || syncing || !configured("jira")}
+              onClick={() => void syncToGraph("jira")}
+            >
+              {syncing ? "Syncing…" : "Sync to graph ↗"}
+            </button>
             <button type="button" className="app-btn-ghost" disabled={busy || !configured("jira")} onClick={() => void runTest("jira")}>
               Test
             </button>
@@ -267,6 +319,7 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
               Disconnect
             </button>
           </div>
+          {focusRuns.length > 0 ? <SyncRunsTable runs={focusRuns} onRefresh={() => void loadRuns()} /> : null}
         </article>
       ) : null}
 
@@ -278,7 +331,9 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
               {configured("slack") ? "Connected" : "Not connected"}
             </span>
           </header>
-          <p className="app-muted">Incoming webhook URL for progress posts (Evolvex-style test message).</p>
+          <p className="app-muted">
+            Incoming webhook for test pings. Add a <strong>bot token</strong> (xoxb-…) to enable full message ingestion into FalkorDB.
+          </p>
           <label className="app-field">
             <span>Webhook URL</span>
             <input
@@ -289,9 +344,36 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
               onChange={(e) => setSlackWebhook(e.target.value)}
             />
           </label>
+          <label className="app-field">
+            <span>Bot token (optional — for full sync)</span>
+            <input
+              className="app-input app-input-block"
+              type="password"
+              placeholder="xoxb-… (channels:read, channels:history)"
+              value={slackBotToken}
+              onChange={(e) => setSlackBotToken(e.target.value)}
+            />
+          </label>
+          <label className="app-field">
+            <span>Team domain (optional)</span>
+            <input
+              className="app-input app-input-block"
+              placeholder="your-team (for message links)"
+              value={slackTeamDomain}
+              onChange={(e) => setSlackTeamDomain(e.target.value)}
+            />
+          </label>
           <div className="app-row-actions">
             <button type="button" className="app-btn" disabled={busy || !slackWebhook} onClick={() => void save("slack")}>
               Save
+            </button>
+            <button
+              type="button"
+              className="app-btn"
+              disabled={busy || syncing || !configured("slack")}
+              onClick={() => void syncToGraph("slack")}
+            >
+              {syncing ? "Syncing…" : "Sync to graph ↗"}
             </button>
             <button type="button" className="app-btn-ghost" disabled={busy || !configured("slack")} onClick={() => void runTest("slack")}>
               Test
@@ -300,8 +382,44 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
               Disconnect
             </button>
           </div>
+          {focusRuns.length > 0 ? <SyncRunsTable runs={focusRuns} onRefresh={() => void loadRuns()} /> : null}
         </article>
       ) : null}
+    </div>
+  );
+}
+
+function SyncRunsTable({ runs, onRefresh }: { runs: SyncRun[]; onRefresh: () => void }) {
+  return (
+    <div className="app-sync-runs">
+      <div className="app-sync-runs-header">
+        <span>Recent syncs</span>
+        <button type="button" className="app-btn-ghost app-btn-small" onClick={onRefresh}>↻ Refresh</button>
+      </div>
+      <table className="app-table">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Items</th>
+            <th>Message</th>
+            <th>Started</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map((r) => (
+            <tr key={r.id}>
+              <td>
+                <span className={`app-pill ${r.status === "ok" ? "app-pill--on" : r.status === "error" ? "app-pill--err" : ""}`}>
+                  {r.status}
+                </span>
+              </td>
+              <td>{r.items}</td>
+              <td className="app-muted">{r.message}</td>
+              <td className="app-muted">{new Date(r.startedAt).toLocaleTimeString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
