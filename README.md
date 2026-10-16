@@ -6,7 +6,9 @@ Hackathon: [Graph Hacks: Context for AI Agents](https://www.wemakedevs.org/hacka
 
 ## Stack
 
-- **API:** Express + tRPC (`apps/api`)
+- **Web:** Next.js sign-in (black gradient) + Google OAuth (`apps/web`)
+- **API:** Express + tRPC + `/auth/google/callback` (`apps/api`)
+- **Services:** JWT cookies + SQLite users (`packages/services`) — same flow as Corsair Hackathon
 - **Procedures:** `@stackfox/trpc` (`packages/trpc`)
 - **Graph DB:** [FalkorDB](https://docs.falkordb.com/getting-started) (Docker)
 
@@ -26,9 +28,16 @@ npm run db:up
 npm run dev
 ```
 
+- Web / sign-in: http://localhost:3000/sign-in  
 - API: http://localhost:8000  
-- FalkorDB Browser: http://localhost:3000  
+- FalkorDB Browser: http://localhost:3001  
 - tRPC: http://localhost:8000/trpc  
+
+### Google OAuth
+
+1. Create OAuth client (Web) in Google Cloud Console.  
+2. Redirect URI: `http://localhost:3000/api-auth/google/callback`  
+3. Copy client ID/secret into `.env` as `GOOGLE_OAUTH_*`  
 
 ## FalkorDB
 
@@ -41,7 +50,9 @@ Stops with `npm run db:down`.
 ## Project layout
 
 ```
-apps/api/          Express server, mounts /trpc
+apps/web/          Next.js UI + `/api-auth/google` (Corsair-style proxy)
+apps/api/          Express server, mounts /trpc + Google callback
+packages/services/ Auth, JWT, Google OAuth, SQLite users
 packages/trpc/     tRPC routers, FalkorDB service, client types
 docker-compose.yml FalkorDB + browser UI
 ```
