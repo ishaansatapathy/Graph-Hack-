@@ -1,5 +1,5 @@
 import { z } from "../../schema";
-import { mapServiceError, publicProcedure, router } from "../../trpc";
+import { mapServiceError, protectedProcedure, router } from "../../trpc";
 import { generatePath } from "../../utils/path-generator";
 import { getGraph } from "../../services";
 
@@ -14,7 +14,7 @@ const pathNodeSchema = z.object({
 
 export const graphRouter = router({
   /** GraphRAG entry — wire ingestion + completion here next */
-  ask: publicProcedure
+  ask: protectedProcedure
     .meta({ openapi: { method: "POST", path: getPath("/ask"), tags: TAGS } })
     .input(
       z.object({
