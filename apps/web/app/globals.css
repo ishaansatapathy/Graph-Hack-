@@ -1,4 +1,76 @@
+.app-graph-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.app-graph-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: auto;
+  font-size: 13px;
+  color: #d1d5db;
+}
+
+.app-graph-canvas-wrap {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.app-graph-canvas {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: radial-gradient(ellipse at 50% 40%, rgba(59, 130, 246, 0.1), rgba(0, 0, 0, 0.6));
+}
+
+.app-graph-node {
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.app-graph-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.app-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.app-graph-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #9ca3af;
+}
+
+.app-graph-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.app-graph-detail pre {
+  margin: 6px 0 0;
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11px;
+  color: #93c5fd;
+}
+
 * {
+
   box-sizing: border-box;
 }
 
@@ -608,3 +680,76 @@ body {
   padding: 0 10px;
   font-size: 12px;
 }
+
+.app-vscode {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 190px);
+  min-height: 480px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #1e1e1e;
+}
+
+.app-vscode-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #181818;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+}
+
+.app-vscode-title {
+  font-weight: 600;
+  color: #93c5fd;
+}
+
+.app-vscode-open {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.app-vscode-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: #1e1e1e;
+}
+
+.app-vscode-hint {
+  padding: 8px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.app-section-title {
+  margin: 28px 0 8px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9ca3af;
+}
+
+.app-tool-item {
+  flex-direction: column;
+  align-items: stretch !important;
+}
+
+.app-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.app-tool-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
