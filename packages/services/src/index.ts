@@ -20,6 +20,9 @@ export {
 } from "./workspace";
 export { githubWebhookUrl, getApiPublicUrl } from "./integrations/config";
 export * as graphEngine from "./graph/engine";
+export { graphRagAnswer } from "./graph/rag";
+export * as agentMemory from "./graph/memory";
+export { triggerSync, syncDb } from "./sync";
 export { githubPushPayloadSchema } from "./github/push-schema";
 export { verifyGithubSignature } from "./github/verify";
 export type { WorkspacePublic } from "./workspace";
