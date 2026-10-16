@@ -12,11 +12,13 @@ export {
   listApiKeys,
   revokeApiKey,
   workspaceIntegrations,
+  workspaceTools,
   handleGithubPush,
   getGithubWebhookSecretForWorkspace,
   getGithubOnboarding,
 } from "./workspace";
 export { githubWebhookUrl, getApiPublicUrl } from "./integrations/config";
+export * as graphEngine from "./graph/engine";
 export { githubPushPayloadSchema } from "./github/push-schema";
 export { verifyGithubSignature } from "./github/verify";
 export type { WorkspacePublic } from "./workspace";
