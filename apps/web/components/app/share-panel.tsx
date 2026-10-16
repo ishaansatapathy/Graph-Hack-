@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { trpc } from "~/lib/trpc";
+import { ToolsPanel } from "./tools-panel";
 
 type ApiKeyRow = {
   id: string;
@@ -88,6 +89,8 @@ export function SharePanel({ workspaceId }: Props) {
         ))}
         {keys.length === 0 ? <li className="app-muted">No API keys yet</li> : null}
       </ul>
+      <h3 className="app-section-title">Shared tools</h3>
+      <ToolsPanel workspaceId={workspaceId} />
     </div>
   );
 }

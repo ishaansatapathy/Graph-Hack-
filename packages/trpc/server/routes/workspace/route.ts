@@ -7,6 +7,7 @@ import {
   messageOutputSchema,
   revokeApiKey,
   workspaceIntegrations,
+  workspaceTools,
 } from "@stackfox/services";
 import { z } from "zod";
 
@@ -240,6 +241,90 @@ export const workspaceRouter = router({
         try {
           revokeApiKey(input.workspaceId, ctx.user.id, input.keyId);
           return { message: "API key revoked" };
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+  }),
+
+  tools: router({
+    list: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid() }))
+      .query(({ ctx, input }) => {
+        try {
+          return {
+            tools: workspaceTools.listTools(input.workspaceId, ctx.user.id),
+            catalog: workspaceTools.TOOL_CATALOG,
+          };
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    create: protectedProcedure
+      .input(
+        z.object({
+          workspaceId: z.string().uuid(),
+          name: z.string().min(1).max(80),
+          kind: z.enum(["query_graph", "find_callers", "graph_stats"]),
+          description: z.string().max(300).optional(),
+        }),
+      )
+      .mutation(({ ctx, input }) => {
+        try {
+          return workspaceTools.createTool(input.workspaceId, ctx.user.id, input);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    setVisibility: protectedProcedure
+      .input(
+        z.object({
+          workspaceId: z.string().uuid(),
+          toolId: z.string().uuid(),
+          visibility: z.enum(["private", "workspace"]),
+        }),
+      )
+      .mutation(({ ctx, input }) => {
+        try {
+          return workspaceTools.setToolVisibility(input.workspaceId, ctx.user.id, input.toolId, input.visibility);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    revoke: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid(), toolId: z.string().uuid() }))
+      .mutation(({ ctx, input }) => {
+        try {
+          return workspaceTools.revokeTool(input.workspaceId, ctx.user.id, input.toolId);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    call: protectedProcedure
+      .input(
+        z.object({
+          workspaceId: z.string().uuid(),
+          toolId: z.string().uuid(),
+          args: z.record(z.string(), z.unknown()).default({}),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await workspaceTools.callTool(input.workspaceId, ctx.user.id, input.toolId, input.args);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    audit: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid() }))
+      .query(({ ctx, input }) => {
+        try {
+          return workspaceTools.listAudit(input.workspaceId, ctx.user.id);
         } catch (error) {
           mapServiceError(error);
         }
