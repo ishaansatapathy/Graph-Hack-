@@ -8,6 +8,7 @@
 import crypto from "node:crypto";
 
 import { sqlite } from "../workspace/db";
+import { redactSecrets } from "./redact";
 
 /** Maximum message pairs (user+assistant) retained per thread. */
 const MAX_TURNS = 20;
@@ -53,7 +54,7 @@ export function appendMessage(
 ): MemoryMessage {
   const id = crypto.randomUUID();
   const createdAt = new Date().toISOString();
-  const truncated = content.slice(0, MAX_CONTENT_BYTES);
+  const truncated = redactSecrets(content).slice(0, MAX_CONTENT_BYTES);
 
   sqlite
     .prepare(
