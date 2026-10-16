@@ -7,8 +7,10 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev -w @stackfox/api",
-    "check-types": "npm run check-types -w @stackfox/trpc && npm run check-types -w @stackfox/api",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @stackfox/api\" \"npm run dev -w @stackfox/web\"",
+    "dev:api": "npm run dev -w @stackfox/api",
+    "dev:web": "npm run dev -w @stackfox/web",
+    "check-types": "npm run check-types -w @stackfox/services && npm run check-types -w @stackfox/trpc && npm run check-types -w @stackfox/api && npm run check-types -w @stackfox/web",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down"
   },
@@ -16,6 +18,7 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "dotenv-cli": "^11.0.0",
     "typescript": "^5.9.3"
   }
