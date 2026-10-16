@@ -1,0 +1,22 @@
+{
+  "name": "graph-hack",
+  "version": "0.0.1",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @stackfox/api",
+    "check-types": "npm run check-types -w @stackfox/trpc && npm run check-types -w @stackfox/api",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^11.0.0",
+    "typescript": "^5.9.3"
+  }
+}
