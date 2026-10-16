@@ -155,8 +155,11 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
         await trpc.workspace.integrations.upsertSlack.mutate({
           workspaceId,
           webhookUrl: slackWebhook,
+          ...(slackBotToken ? { botToken: slackBotToken } : {}),
+          ...(slackTeamDomain ? { teamDomain: slackTeamDomain } : {}),
         });
         setSlackWebhook("");
+        setSlackBotToken("");
         setMessage({ tone: "ok", text: "Slack saved — add a bot token for full message ingestion" });
       }
       await load();

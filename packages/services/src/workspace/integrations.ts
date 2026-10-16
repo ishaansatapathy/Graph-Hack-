@@ -47,6 +47,8 @@ export function listIntegrationSummaries(workspaceId: string): IntegrationSummar
     }
     if (provider === "slack") {
       masked.webhookUrl = config.webhookUrl ? "https://hooks.slack.com/•••" : null;
+      masked.botToken = config.botToken ? "xoxb-•••" : null;
+      masked.teamDomain = config.teamDomain ?? null;
     }
     return {
       provider,
@@ -130,12 +132,32 @@ export function upsertJira(
   workspaceDb.upsertIntegration(workspaceId, "jira", encryptJson({ baseUrl, email, apiToken }));
 }
 
-export function upsertSlack(workspaceId: string, input: { webhookUrl: string }) {
+export function upsertSlack(
+  workspaceId: string,
+  input: { webhookUrl: string; botToken?: string; teamDomain?: string },
+) {
   const webhookUrl = input.webhookUrl.trim();
   if (!webhookUrl.startsWith("https://hooks.slack.com/")) {
     throw new Error("Use a valid Slack incoming webhook URL");
   }
-  workspaceDb.upsertIntegration(workspaceId, "slack", encryptJson({ webhookUrl }));
+  const existing = (function () {
+    try {
+      const row = workspaceDb.getIntegration(workspaceId, "slack");
+      return row ? decryptJson(row.config_encrypted) : {};
+    } catch {
+      return {};
+    }
+  })();
+  workspaceDb.upsertIntegration(
+    workspaceId,
+    "slack",
+    encryptJson({
+      ...existing,
+      webhookUrl,
+      ...(input.botToken?.trim() ? { botToken: input.botToken.trim() } : {}),
+      ...(input.teamDomain?.trim() ? { teamDomain: input.teamDomain.trim() } : {}),
+    }),
+  );
 }
 
 export function removeIntegration(workspaceId: string, provider: IntegrationProvider) {

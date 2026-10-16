@@ -215,6 +215,8 @@ export const workspaceRouter = router({
         z.object({
           workspaceId: z.string().uuid(),
           webhookUrl: z.string().startsWith("https://hooks.slack.com/"),
+          botToken: z.string().optional(),
+          teamDomain: z.string().optional(),
         }),
       )
       .output(messageOutputSchema)
