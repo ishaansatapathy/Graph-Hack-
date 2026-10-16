@@ -11,3 +11,5 @@ dist/
 .turbo
 .idea/
 .vscode/
+*.tsbuildinfo
+
