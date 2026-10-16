@@ -84,5 +84,6 @@ export function revokeApiKey(workspaceId: string, userId: string, keyId: string)
 }
 
 export const workspaceIntegrations = integrationOps;
+export * as workspaceTools from "./tools";
 export { handleGithubPush, getGithubWebhookSecretForWorkspace } from "./github-push-handler";
 export { getGithubOnboarding } from "./integrations";
