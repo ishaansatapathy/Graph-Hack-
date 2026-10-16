@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import * as workspaceDb from "./db";
 import * as integrationOps from "./integrations";
+import * as memberOps from "./members";
 
 export type WorkspacePublic = {
   id: string;
@@ -15,8 +16,15 @@ function toRole(role: string): WorkspacePublic["role"] {
   return "member";
 }
 
-export function getOrCreateWorkspaceForUser(userId: string, displayName: string): WorkspacePublic {
-  const existing = workspaceDb.findWorkspaceForUser(userId);
+export function getOrCreateWorkspaceForUser(
+  userId: string,
+  displayName: string,
+  email?: string,
+): WorkspacePublic {
+  if (email) memberOps.acceptPendingInvites(userId, email);
+  const activeId = memberOps.resolveActiveWorkspaceId(userId);
+  const existing =
+    (activeId ? workspaceDb.findWorkspaceById(activeId) : null) ?? workspaceDb.findWorkspaceForUser(userId);
   if (existing) {
     const role = workspaceDb.getMemberRole(existing.id, userId) ?? "member";
     return {
@@ -84,6 +92,7 @@ export function revokeApiKey(workspaceId: string, userId: string, keyId: string)
 }
 
 export const workspaceIntegrations = integrationOps;
+export const workspaceMembers = memberOps;
 export * as workspaceTools from "./tools";
 export { handleGithubPush, getGithubWebhookSecretForWorkspace } from "./github-push-handler";
 export { getGithubOnboarding } from "./integrations";

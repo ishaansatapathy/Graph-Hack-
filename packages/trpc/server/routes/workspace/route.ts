@@ -8,6 +8,7 @@ import {
   revokeApiKey,
   workspaceIntegrations,
   workspaceTools,
+  workspaceMembers,
 } from "@stackfox/services";
 import { z } from "zod";
 
@@ -46,11 +47,94 @@ export const workspaceRouter = router({
     .output(workspaceSchema)
     .query(({ ctx }) => {
       try {
-        return getOrCreateWorkspaceForUser(ctx.user.id, ctx.user.fullName);
+        return getOrCreateWorkspaceForUser(ctx.user.id, ctx.user.fullName, ctx.user.email);
       } catch (error) {
         mapServiceError(error);
       }
     }),
+
+  list: protectedProcedure.query(({ ctx }) => {
+    try {
+      return workspaceMembers.listWorkspacesForUser(ctx.user.id);
+    } catch (error) {
+      mapServiceError(error);
+    }
+  }),
+
+  setActive: protectedProcedure
+    .input(z.object({ workspaceId: z.string().uuid() }))
+    .mutation(({ ctx, input }) => {
+      try {
+        workspaceMembers.setActiveWorkspace(ctx.user.id, input.workspaceId);
+        return { ok: true };
+      } catch (error) {
+        mapServiceError(error);
+      }
+    }),
+
+  members: router({
+    list: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid() }))
+      .query(({ ctx, input }) => {
+        try {
+          return workspaceMembers.listMembers(input.workspaceId, ctx.user.id);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    invite: protectedProcedure
+      .input(
+        z.object({
+          workspaceId: z.string().uuid(),
+          email: z.string().email(),
+          role: z.enum(["admin", "member"]).default("member"),
+        }),
+      )
+      .mutation(({ ctx, input }) => {
+        try {
+          return workspaceMembers.inviteMember(input.workspaceId, ctx.user.id, input.email, input.role);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    cancelInvite: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid(), inviteId: z.string().uuid() }))
+      .mutation(({ ctx, input }) => {
+        try {
+          return workspaceMembers.cancelInvite(input.workspaceId, ctx.user.id, input.inviteId);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    setRole: protectedProcedure
+      .input(
+        z.object({
+          workspaceId: z.string().uuid(),
+          userId: z.string().uuid(),
+          role: z.enum(["admin", "member"]),
+        }),
+      )
+      .mutation(({ ctx, input }) => {
+        try {
+          return workspaceMembers.setMemberRole(input.workspaceId, ctx.user.id, input.userId, input.role);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    remove: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid(), userId: z.string().uuid() }))
+      .mutation(({ ctx, input }) => {
+        try {
+          return workspaceMembers.removeMember(input.workspaceId, ctx.user.id, input.userId);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+  }),
 
   integrations: router({
     list: protectedProcedure

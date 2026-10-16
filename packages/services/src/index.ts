@@ -13,6 +13,7 @@ export {
   revokeApiKey,
   workspaceIntegrations,
   workspaceTools,
+  workspaceMembers,
   handleGithubPush,
   getGithubWebhookSecretForWorkspace,
   getGithubOnboarding,

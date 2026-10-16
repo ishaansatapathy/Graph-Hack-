@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { getGraph } from "../graph/falkordb";
+import { recordAudit } from "./audit";
 import * as workspaceDb from "./db";
 
 const { sqlite } = workspaceDb;
@@ -41,12 +42,7 @@ export const TOOL_CATALOG: Record<ToolKind, { label: string; description: string
 };
 
 function audit(workspaceId: string, actorUserId: string, action: string, toolId: string | null, detail = "") {
-  sqlite
-    .prepare(
-      `INSERT INTO audit_events (id, workspace_id, actor_user_id, action, tool_id, detail, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(crypto.randomUUID(), workspaceId, actorUserId, action, toolId, detail.slice(0, 500), new Date().toISOString());
+  recordAudit(workspaceId, actorUserId, action, toolId, detail);
 }
 
 function getTool(workspaceId: string, toolId: string): ToolRow {
