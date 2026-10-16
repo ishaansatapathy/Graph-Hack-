@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { getGraph } from "../graph/falkordb";
+import * as graphEngine from "../graph/engine";
 import { recordAudit } from "./audit";
 import * as workspaceDb from "./db";
 
@@ -168,40 +168,33 @@ export function listAudit(workspaceId: string, userId: string) {
   }));
 }
 
-const WRITE_PATTERN = /\b(create|merge|delete|detach|set|remove|drop|load|foreach|call)\b/i;
-
-function assertReadOnlyCypher(cypher: string) {
-  if (WRITE_PATTERN.test(cypher)) {
-    throw new Error("Only read-only Cypher is allowed (no CREATE/MERGE/DELETE/SET/REMOVE/CALL)");
-  }
-}
-
 export async function callTool(workspaceId: string, userId: string, toolId: string, args: Record<string, unknown>) {
   const tool = getTool(workspaceId, toolId);
   assertCanUse(tool, userId);
 
   try {
-    const graph = await getGraph();
     let cypher: string;
-    let params: Record<string, string> = {};
+    let rows: unknown[];
 
     if (tool.kind === "query_graph") {
-      cypher = String(args.cypher ?? "").trim();
-      if (!cypher) throw new Error("`cypher` is required");
-      assertReadOnlyCypher(cypher);
-      if (!/\blimit\b/i.test(cypher)) cypher += " LIMIT 100";
+      const requested = String(args.cypher ?? "").trim();
+      if (!requested) throw new Error("`cypher` is required");
+      const result = await graphEngine.runReadOnlyCypher(workspaceId, requested);
+      cypher = result.cypher;
+      rows = result.rows;
     } else if (tool.kind === "find_callers") {
       const symbol = String(args.symbol ?? "").trim();
       if (!symbol) throw new Error("`symbol` is required");
-      cypher = "MATCH (c:Function)-[:CALLS]->(f:Function {name: $symbol}) RETURN c.name AS caller, c.file AS file LIMIT 100";
-      params = { symbol };
+      const result = await graphEngine.findCallers(workspaceId, symbol);
+      cypher = result.cypher;
+      rows = result.rows;
     } else {
-      cypher = "CALL db.meta.stats() YIELD nodeCount, relCount RETURN nodeCount, relCount";
+      cypher = "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count";
+      rows = await graphEngine.getGraphStats(workspaceId).then((s) => [s]);
     }
 
-    const result = await graph.roQuery(cypher, { params });
     audit(workspaceId, userId, "tool.called", toolId, `${tool.name} v${tool.version}`);
-    return { cypher, rows: (result.data ?? []) as unknown[], toolVersion: tool.version };
+    return { cypher, rows, toolVersion: tool.version };
   } catch (error) {
     audit(workspaceId, userId, "tool.call_failed", toolId, error instanceof Error ? error.message : "error");
     throw error;

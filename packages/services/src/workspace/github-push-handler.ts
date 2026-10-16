@@ -1,6 +1,6 @@
 import type { GithubPushPayload } from "../github/push-schema";
 import { extractJiraKeys, summarizePush } from "../github/push-schema";
-import { getGraph } from "../graph/falkordb";
+import { graphWrite } from "../graph/falkordb";
 import * as workspaceDb from "./db";
 import { decryptJson } from "./secrets";
 
@@ -55,36 +55,36 @@ export async function handleGithubPush(workspaceId: string, payload: GithubPushP
   const jiraKeys = extractJiraKeys(summary.message);
 
   try {
-    const graph = await getGraph();
     const sha = summary.fullSha || summary.sha;
-    await graph.query(
+    await graphWrite(
+      workspaceId,
       `
-      MERGE (r:Repository { fullName: $repo })
-      SET r.branch = $branch
+      MERGE (r:Repository { name: $repo })
       MERGE (c:Commit { sha: $sha })
       SET c.message = $message, c.author = $author, c.branch = $branch, c.at = $at
+      MERGE (p:Person { name: $author })
+      MERGE (p)-[:AUTHORED]->(c)
       MERGE (r)-[:HAS_COMMIT]->(c)
       `,
       {
-        params: {
-          repo: summary.repo,
-          branch: summary.branch,
-          sha,
-          message: summary.message,
-          author: summary.author,
-          at: new Date().toISOString(),
-        },
+        repo: summary.repo,
+        branch: summary.branch,
+        sha,
+        message: summary.message,
+        author: summary.author,
+        at: new Date().toISOString(),
       },
     );
 
     for (const key of jiraKeys) {
-      await graph.query(
+      await graphWrite(
+        workspaceId,
         `
         MATCH (c:Commit { sha: $sha })
         MERGE (i:Issue { key: $key })
         MERGE (c)-[:REFERENCES]->(i)
         `,
-        { params: { sha, key } },
+        { sha, key },
       );
     }
   } catch (error) {

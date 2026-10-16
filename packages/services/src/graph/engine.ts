@@ -1,4 +1,4 @@
-import { getGraph } from "./falkordb";
+import { type CypherParams, graphRead, graphWrite, type Row } from "./falkordb";
 
 const WRITE_PATTERN = /\b(create|merge|delete|detach|set|remove|drop|load|foreach|call)\b/i;
 
@@ -6,14 +6,6 @@ export function assertReadOnlyCypher(cypher: string) {
   if (WRITE_PATTERN.test(cypher)) {
     throw new Error("Only read-only Cypher is allowed (no CREATE/MERGE/DELETE/SET/REMOVE/CALL)");
   }
-}
-
-type Row = Record<string, unknown>;
-
-async function ro(cypher: string, params: Record<string, string | number> = {}) {
-  const graph = await getGraph();
-  const res = await graph.roQuery(cypher, { params });
-  return (res.data ?? []) as Row[];
 }
 
 /** Demo scenario: JWT refresh-token refactor vs 15-minute expiry security hotfix. */
@@ -55,18 +47,22 @@ const SEED_STATEMENTS: string[] = [
           (c)-[:AFFECTS]->(v), (c)-[:BETWEEN]->(h), (c)-[:BETWEEN]->(p)`,
 ];
 
-export async function seedDemoGraph() {
-  const graph = await getGraph();
+export async function seedDemoGraph(workspaceId: string) {
   for (const statement of SEED_STATEMENTS) {
-    await graph.query(statement);
+    await graphWrite(workspaceId, statement);
   }
-  return getGraphStats();
+  return getGraphStats(workspaceId);
 }
 
-export async function getGraphStats() {
-  const nodes = await ro("MATCH (n) RETURN count(n) AS c");
-  const rels = await ro("MATCH ()-[r]->() RETURN count(r) AS c");
-  const labels = await ro("MATCH (n) RETURN labels(n)[0] AS label, count(n) AS c ORDER BY c DESC");
+export async function clearGraph(workspaceId: string) {
+  await graphWrite(workspaceId, "MATCH (n) DETACH DELETE n");
+  return getGraphStats(workspaceId);
+}
+
+export async function getGraphStats(workspaceId: string) {
+  const nodes = await graphRead(workspaceId, "MATCH (n) RETURN count(n) AS c");
+  const rels = await graphRead(workspaceId, "MATCH ()-[r]->() RETURN count(r) AS c");
+  const labels = await graphRead(workspaceId, "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS c ORDER BY c DESC");
   return {
     nodeCount: Number(nodes[0]?.c ?? 0),
     relCount: Number(rels[0]?.c ?? 0),
@@ -77,12 +73,13 @@ export async function getGraphStats() {
 export type GraphNode = { id: string; label: string; title: string; properties: Record<string, unknown> };
 export type GraphEdge = { source: string; target: string; type: string };
 
-function nodeTitle(label: string, props: Record<string, unknown>) {
+export function nodeTitle(label: string, props: Record<string, unknown>) {
   return String(props.name ?? props.key ?? props.path ?? props.sha ?? props.title ?? props.id ?? props.channel ?? label);
 }
 
-export async function getSubgraph(limit = 200) {
-  const nodeRows = await ro(
+export async function getSubgraph(workspaceId: string, limit = 200) {
+  const nodeRows = await graphRead(
+    workspaceId,
     "MATCH (n) RETURN id(n) AS id, labels(n)[0] AS label, properties(n) AS props LIMIT $limit",
     { limit },
   );
@@ -91,7 +88,8 @@ export async function getSubgraph(limit = 200) {
     const label = String(r.label);
     return { id: String(r.id), label, title: nodeTitle(label, props), properties: props };
   });
-  const edgeRows = await ro(
+  const edgeRows = await graphRead(
+    workspaceId,
     "MATCH (a)-[r]->(b) RETURN id(a) AS s, id(b) AS t, type(r) AS type LIMIT $limit",
     { limit: limit * 3 },
   );
@@ -102,70 +100,23 @@ export async function getSubgraph(limit = 200) {
   return { nodes, edges };
 }
 
-export async function runReadOnlyCypher(cypher: string) {
+export async function runReadOnlyCypher(workspaceId: string, cypher: string) {
   assertReadOnlyCypher(cypher);
   const query = /\blimit\b/i.test(cypher) ? cypher : `${cypher} LIMIT 100`;
-  const rows = await ro(query);
+  const rows = await graphRead(workspaceId, query);
   return { cypher: query, rows };
 }
 
-export type SymbolContext = {
-  symbol: string;
-  file: string | null;
-  callers: string[];
-  callees: string[];
-  tests: string[];
-  commits: string[];
-  issues: string[];
-  discussions: string[];
-  decisions: string[];
-  conflicts: string[];
-  cypher: string;
-};
-
-const CONTEXT_CYPHER = `MATCH (f:Function {name: $symbol})
-OPTIONAL MATCH (caller:Function)-[:CALLS]->(f)
-OPTIONAL MATCH (f)-[:CALLS]->(callee:Function)
-OPTIONAL MATCH (t:Test)-[:TESTS]->(f)
-OPTIONAL MATCH (c:Commit)-[:MODIFIED]->(f)
-OPTIONAL MATCH (c)-[:REFERENCES]->(i:Issue)
-OPTIONAL MATCH (m:Discussion)-[:CONCERNS]->(f)
-OPTIONAL MATCH (d:Decision)-[:CONSTRAINS]->(f)
-OPTIONAL MATCH (x:Conflict)-[:AFFECTS]->(f)
-RETURN f.file AS file,
-  collect(DISTINCT caller.name) AS callers, collect(DISTINCT callee.name) AS callees,
-  collect(DISTINCT t.name) AS tests,
-  collect(DISTINCT c.sha + ' ' + c.message + ' [' + c.branch + ']') AS commits,
-  collect(DISTINCT i.key + ': ' + i.title) AS issues,
-  collect(DISTINCT m.channel + ' @' + m.author + ': ' + m.text) AS discussions,
-  collect(DISTINCT d.title + ' (' + d.rationale + ')') AS decisions,
-  collect(DISTINCT x.id) AS conflicts`;
-
-function strings(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x) => x != null).map(String) : [];
-}
-
-/** Multi-hop engineering context around a function — the GraphRAG retrieval step. */
-export async function getSymbolContext(symbol: string): Promise<SymbolContext | null> {
-  const rows = await ro(CONTEXT_CYPHER, { symbol });
-  const r = rows[0];
-  if (!r) return null;
-  return {
-    symbol,
-    file: r.file == null ? null : String(r.file),
-    callers: strings(r.callers),
-    callees: strings(r.callees),
-    tests: strings(r.tests),
-    commits: strings(r.commits),
-    issues: strings(r.issues),
-    discussions: strings(r.discussions),
-    decisions: strings(r.decisions),
-    conflicts: strings(r.conflicts),
-    cypher: CONTEXT_CYPHER.replace("$symbol", `'${symbol}'`),
-  };
-}
-
-export async function listFunctionNames(): Promise<string[]> {
-  const rows = await ro("MATCH (f:Function) RETURN f.name AS name");
+export async function listFunctionNames(workspaceId: string): Promise<string[]> {
+  const rows = await graphRead(workspaceId, "MATCH (f:Function) RETURN f.name AS name");
   return rows.map((r) => String(r.name));
 }
+
+export async function findCallers(workspaceId: string, symbol: string) {
+  const cypher =
+    "MATCH (c:Function)-[:CALLS]->(f:Function {name: $symbol}) RETURN c.name AS caller, c.file AS file LIMIT 100";
+  const rows = await graphRead(workspaceId, cypher, { symbol });
+  return { cypher, rows };
+}
+
+export type { CypherParams, Row };
