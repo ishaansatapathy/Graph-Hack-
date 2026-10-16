@@ -2,50 +2,33 @@
 
 import { useState } from "react";
 
-const STARTER = `// Stackfox IDE — Cypher / agent scratchpad
-MATCH (c:Commit)-[:REFERENCES]->(i:Issue)
-RETURN c.sha, i.key
-LIMIT 10
-`;
+const VSCODE_URL = process.env.NEXT_PUBLIC_VSCODE_URL ?? "http://localhost:3002/?folder=/home/workspace";
 
-type Props = {
-  onRunCypher?: (query: string) => void;
-};
-
-export function IdePanel({ onRunCypher }: Props) {
-  const [code, setCode] = useState(STARTER);
-  const [output, setOutput] = useState("");
-
-  function run() {
-    if (onRunCypher) {
-      onRunCypher(code);
-      return;
-    }
-    setOutput("Run wired to graph API next — paste queries here for demo.");
-  }
+/** Embeds a full VS Code (OpenVSCode Server fork) in the browser. */
+export function IdePanel() {
+  const [loaded, setLoaded] = useState(false);
 
   return (
-    <div className="app-ide">
-      <div className="app-ide-toolbar">
-        <span className="app-ide-file">graph.cypher</span>
-        <button type="button" className="app-btn app-btn-small" onClick={run}>
-          Run
-        </button>
+    <div className="app-vscode">
+      <div className="app-vscode-bar">
+        <span className="app-vscode-title">VS Code · Web</span>
+        <span className="app-muted">{loaded ? "Connected" : "Connecting…"}</span>
+        <a className="app-btn-ghost app-btn-small app-vscode-open" href={VSCODE_URL} target="_blank" rel="noreferrer">
+          Open in new tab
+        </a>
       </div>
-      <textarea
-        className="app-ide-editor"
-        spellCheck={false}
-        value={code}
-        onChange={(e) => setCode(e.target.value)}
-        aria-label="IDE editor"
+      <iframe
+        title="VS Code"
+        src={VSCODE_URL}
+        className="app-vscode-frame"
+        onLoad={() => setLoaded(true)}
+        allow="clipboard-read; clipboard-write"
       />
-      {output ? (
-        <div className="app-ide-output">
-          <strong>Output</strong>
-          <pre>{output}</pre>
-        </div>
+      {!loaded ? (
+        <p className="app-muted app-vscode-hint">
+          Editor not loading? Start it with <code>npm run db:up</code> (Docker) and open port 3002.
+        </p>
       ) : null}
-      <p className="app-muted app-ide-hint">Teammate can swap this for Monaco / full IDE later.</p>
     </div>
   );
 }

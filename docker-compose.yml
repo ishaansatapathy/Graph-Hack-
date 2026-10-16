@@ -9,5 +9,16 @@ services:
       - falkordb_data:/data
     restart: unless-stopped
 
+  # VS Code fork (Gitpod OpenVSCode Server) — embedded in the web app at /app/ide
+  vscode:
+    image: gitpod/openvscode-server:latest
+    container_name: stackfox-vscode
+    command: ["--host", "0.0.0.0", "--without-connection-token"]
+    ports:
+      - "3002:3000"
+    volumes:
+      - .:/home/workspace:cached
+    restart: unless-stopped
+
 volumes:
   falkordb_data:
