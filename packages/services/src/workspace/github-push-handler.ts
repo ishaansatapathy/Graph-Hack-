@@ -1,5 +1,6 @@
 import type { GithubPushPayload } from "../github/push-schema";
 import { extractJiraKeys, summarizePush } from "../github/push-schema";
+import { upsertChunks } from "../graph/chunks";
 import { graphWrite } from "../graph/falkordb";
 import * as workspaceDb from "./db";
 import { decryptJson } from "./secrets";
@@ -139,6 +140,15 @@ export async function handleGithubPush(workspaceId: string, payload: GithubPushP
         { sha, key },
       );
     }
+
+    // 4. Chunk the commit message for GraphRAG
+    const commitText = `commit ${sha} by ${summary.author} on ${summary.branch}: ${summary.message}`;
+    await upsertChunks(workspaceId, {
+      type: "Commit",
+      keyProp: "sha",
+      keyValue: sha,
+      label: `${summary.repo}/${summary.branch}`,
+    }, commitText).catch(() => {/* non-fatal */});
   } catch (error) {
     console.warn("[github] FalkorDB ingest skipped", error instanceof Error ? error.message : error);
   }

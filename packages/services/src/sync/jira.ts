@@ -9,6 +9,7 @@
  * relationships.
  */
 
+import { upsertChunks } from "../graph/chunks";
 import { graphWrite } from "../graph/falkordb";
 import { decryptJson } from "../workspace/secrets";
 import * as workspaceDb from "../workspace/db";
@@ -102,6 +103,11 @@ export async function syncJiraToGraph(workspaceId: string): Promise<JiraSyncResu
             { key, label },
           );
         }
+
+        // Chunk the issue for GraphRAG keyword search
+        const chunkText = `${key} (${issueType}) [${status}] [${priority}]: ${title}. Assignee: ${assignee || "unassigned"}. Labels: ${(issue.fields.labels ?? []).join(", ")}`;
+        await upsertChunks(workspaceId, { type: "Issue", keyProp: "key", keyValue: key, label: key }, chunkText)
+          .catch(() => {/* non-fatal */});
 
         upserted++;
       } catch {
