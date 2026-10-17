@@ -319,6 +319,7 @@ export async function insertUser(user: {
   profileImageUrl?: string | null;
   provider?: string;
   providerId?: string | null;
+  emailVerified?: boolean;
 }): Promise<DbUser> {
   const [row] = await db.insert(schema.users).values({
     id: user.id,
@@ -329,6 +330,7 @@ export async function insertUser(user: {
     profileImageUrl: user.profileImageUrl ?? null,
     provider: user.provider ?? "google",
     providerId: user.providerId ?? null,
+    emailVerified: user.emailVerified ?? (user.provider === "google"),
   }).returning();
   if (!row) throw new Error("insertUser: no row returned");
   return rowToDbUser(row);
@@ -338,12 +340,14 @@ export async function updateUserProvider(id: string, update: {
   profileImageUrl?: string | null;
   providerId?: string;
   fullName?: string;
+  emailVerified?: boolean;
 }): Promise<void> {
   await db.update(schema.users)
     .set({
       ...(update.profileImageUrl !== undefined && { profileImageUrl: update.profileImageUrl }),
       ...(update.providerId && { providerId: update.providerId }),
       ...(update.fullName && { fullName: update.fullName, name: update.fullName }),
+      ...(update.emailVerified !== undefined && { emailVerified: update.emailVerified }),
       updatedAt: new Date(),
     })
     .where(eq(schema.users.id, id));

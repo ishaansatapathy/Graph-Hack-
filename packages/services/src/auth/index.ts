@@ -173,6 +173,7 @@ class AuthService {
           profileImageUrl: payload.picture ?? null,
           provider: "google",
           providerId: payload.sub,
+          emailVerified: Boolean(payload.email_verified ?? true),
         });
         // Fire-and-forget welcome email for new sign-ups
         void sendWelcomeEmail({ to: sanitizedEmail, name: user.full_name || sanitizedEmail });
@@ -185,10 +186,11 @@ class AuthService {
         if (user.provider_id && user.provider_id !== payload.sub) {
           throw new AuthError("CONFLICT", "This email is linked to a different Google account.");
         }
-        if (!user.provider_id) {
+        if (!user.provider_id || !user.email_verified) {
           await userDb.updateUserProvider(user.id, {
             providerId: payload.sub,
-            profileImageUrl: payload.picture ?? null,
+            profileImageUrl: payload.picture ?? user.profile_image_url,
+            emailVerified: Boolean(payload.email_verified ?? true),
           });
           user = (await this.findUserById(user.id))!;
         }
