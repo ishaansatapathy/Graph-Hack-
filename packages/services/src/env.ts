@@ -44,6 +44,9 @@ const envSchema = z.object({
   FP_SALT: z.string().optional(),
   ENCRYPTION_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).optional(),
+  // Email
+  RESEND_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+  EMAIL_FROM: z.string().default("Stackfox <onboarding@resend.dev>"),
 });
 
 function createEnv(env: NodeJS.ProcessEnv) {
@@ -65,4 +68,8 @@ export function getGoogleOAuthConfig() {
 export function isGoogleOAuthConfigured() {
   const { clientId, clientSecret, redirectUri } = getGoogleOAuthConfig();
   return !!(clientId && clientSecret && redirectUri);
+}
+
+export function isResendConfigured() {
+  return !!env.RESEND_API_KEY;
 }

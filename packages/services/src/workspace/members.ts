@@ -4,6 +4,7 @@ import { and, eq, isNull } from "drizzle-orm";
 
 import { db, schema } from "../db/client";
 import { findUserByEmail, findUserById, getMemberRole, insertWorkspaceMember } from "../db/index";
+import { sendInviteEmail, sendMemberJoinedEmail } from "../email";
 import { childLogger } from "../logger";
 
 const log = childLogger("members");
@@ -74,11 +75,34 @@ export async function inviteMember(
   const email = emailRaw.trim().toLowerCase();
   if (!email.includes("@")) throw new Error("Enter a valid email");
 
+  const actor = await findUserById(actorId);
+  const actorName = actor?.display_name || actor?.full_name || "A teammate";
+  const [ws] = await db.select({ name: schema.workspaces.name })
+    .from(schema.workspaces)
+    .where(eq(schema.workspaces.id, workspaceId))
+    .limit(1);
+  const workspaceName = ws?.name ?? "your workspace";
+
   const user = await findUserByEmail(email);
   if (user) {
     const existing = await getMemberRole(workspaceId, user.id);
     if (existing) throw new Error("Already a member of this workspace");
     await insertWorkspaceMember({ workspace_id: workspaceId, user_id: user.id, role });
+
+    // Notify existing workspace members that someone new joined
+    const membersResult = await listMembers(workspaceId, actorId);
+    const notifyEmails = membersResult.members
+      .filter((m) => m.userId !== user.id && m.email)
+      .map((m) => m.email);
+    void sendMemberJoinedEmail({
+      to: notifyEmails,
+      joinerName: user.display_name || user.full_name || email,
+      joinerEmail: email,
+      workspaceName,
+      workspaceId,
+      role,
+    });
+
     return { status: "added" as const, message: `${email} added as ${role}` };
   }
 
@@ -94,17 +118,28 @@ export async function inviteMember(
 
   if (existingInvite.length > 0) throw new Error("An invite is already pending for this email");
 
+  const inviteToken = crypto.randomBytes(32).toString("hex");
+
   await db.insert(schema.workspaceInvites).values({
     id: crypto.randomUUID(),
     workspaceId,
     email,
     role,
     invitedByUserId: actorId,
-    token: crypto.randomBytes(32).toString("hex"),
+    token: inviteToken,
     expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
   });
 
-  return { status: "invited" as const, message: `Invite saved — ${email} joins when they sign in` };
+  // Fire-and-forget invite email
+  void sendInviteEmail({
+    to: email,
+    workspaceName,
+    inviterName: actorName,
+    inviteToken,
+    role,
+  });
+
+  return { status: "invited" as const, message: `Invite sent to ${email} — expires in 7 days` };
 }
 
 export async function cancelInvite(workspaceId: string, actorId: string, inviteId: string) {

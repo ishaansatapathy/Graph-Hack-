@@ -5,6 +5,7 @@ import { env, getGoogleOAuthConfig, isGoogleOAuthConfigured } from "../env";
 import { getGoogleOAuth2Client } from "../clients/google-oauth";
 import * as userDb from "../db";
 import type { DbUser } from "../db";
+import { sendWelcomeEmail } from "../email";
 import { AuthError, toAuthError } from "./errors";
 import {
   clearAuthCookies,
@@ -173,6 +174,8 @@ class AuthService {
           provider: "google",
           providerId: payload.sub,
         });
+        // Fire-and-forget welcome email for new sign-ups
+        void sendWelcomeEmail({ to: sanitizedEmail, name: user.full_name || sanitizedEmail });
       } else if (user.provider !== "google") {
         throw new AuthError(
           "CONFLICT",
