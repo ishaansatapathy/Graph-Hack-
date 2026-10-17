@@ -1,4 +1,4 @@
-export type AppFeatureId = "ide" | "graph" | "github" | "jira" | "slack" | "workspace" | "share";
+export type AppFeatureId = "ide" | "graph" | "conflicts" | "github" | "jira" | "slack" | "workspace" | "share";
 
 export type AppFeature = {
   id: AppFeatureId;
@@ -22,6 +22,13 @@ export const APP_FEATURES: AppFeature[] = [
     icon: "◈",
     description: "Ask questions over FalkorDB context",
     path: "/app",
+  },
+  {
+    id: "conflicts",
+    label: "Conflicts",
+    icon: "⚡",
+    description: "Detect & resolve team conflicts with AI",
+    path: "/app/conflicts",
   },
   {
     id: "github",
@@ -63,5 +70,7 @@ export const APP_FEATURES: AppFeature[] = [
 export function featureFromPath(pathname: string): AppFeature {
   const exact = APP_FEATURES.find((f) => f.path === pathname);
   if (exact) return exact;
+  const prefix = APP_FEATURES.find((f) => f.path !== "/app" && pathname.startsWith(f.path));
+  if (prefix) return prefix;
   return APP_FEATURES.find((f) => f.id === "graph")!;
 }
