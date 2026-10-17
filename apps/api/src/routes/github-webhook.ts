@@ -37,7 +37,7 @@ githubWebhookRouter.post("/", async (req, res) => {
     return res.status(400).json({ error: "workspaceId query param required" });
   }
 
-  const secret = getGithubWebhookSecretForWorkspace(workspaceId);
+  const secret = await getGithubWebhookSecretForWorkspace(workspaceId);
   if (!verifyGithubSignature(req, res, secret)) return;
 
   const event = req.headers["x-github-event"];
