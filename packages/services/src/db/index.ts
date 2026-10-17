@@ -112,6 +112,153 @@ export async function insertWorkspaceMember(member: DbWorkspaceMember): Promise<
   }).onConflictDoNothing();
 }
 
+/**
+ * Production ACID transaction: atomically creates a workspace, establishes the
+ * creator as owner in workspace_members, sets their active workspace pointer,
+ * and writes the initial audit record.
+ */
+export async function createWorkspaceAtomic(opts: {
+  userId: string;
+  name: string;
+  slug?: string;
+  plan?: string;
+}): Promise<DbWorkspace> {
+  const baseName = opts.name.trim() || "My workspace";
+  const id = crypto.randomUUID();
+  let slug = opts.slug || slugifyName(baseName);
+
+  // If slug collision occurs, append short random entropy
+  const existing = await findWorkspaceBySlug(slug);
+  if (existing) {
+    slug = `${slug}-${crypto.randomBytes(3).toString("hex")}`;
+  }
+
+  return await db.transaction(async (tx) => {
+    const [wsRow] = await tx
+      .insert(schema.workspaces)
+      .values({
+        id,
+        name: baseName,
+        slug,
+        ownerUserId: opts.userId,
+        plan: opts.plan ?? "free",
+      })
+      .returning();
+
+    if (!wsRow) throw new Error("Failed to create workspace row in transaction");
+
+    // Insert owner member
+    await tx.insert(schema.workspaceMembers).values({
+      workspaceId: id,
+      userId: opts.userId,
+      role: "owner",
+    });
+
+    // Point user's active workspace to newly created workspace
+    await tx
+      .update(schema.users)
+      .set({ activeWorkspaceId: id, updatedAt: new Date() })
+      .where(eq(schema.users.id, opts.userId));
+
+    // Record audit event
+    await tx.insert(schema.auditEvents).values({
+      id: crypto.randomUUID(),
+      workspaceId: id,
+      actorUserId: opts.userId,
+      action: "workspace.created",
+      detail: `Created workspace ${baseName}`,
+    });
+
+    return {
+      id: wsRow.id,
+      name: wsRow.name,
+      slug: wsRow.slug,
+      owner_user_id: wsRow.ownerUserId,
+      created_at: wsRow.createdAt.toISOString(),
+    };
+  });
+}
+
+/**
+ * Production ACID transaction: soft-deletes a workspace, resets activeWorkspaceId
+ * for any affected users, and records an audit event.
+ */
+export async function softDeleteWorkspaceAtomic(workspaceId: string, actorUserId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.workspaces)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(eq(schema.workspaces.id, workspaceId));
+
+    await tx
+      .update(schema.users)
+      .set({ activeWorkspaceId: null, updatedAt: new Date() })
+      .where(eq(schema.users.activeWorkspaceId, workspaceId));
+
+    await tx.insert(schema.auditEvents).values({
+      id: crypto.randomUUID(),
+      workspaceId,
+      actorUserId,
+      action: "workspace.deleted",
+      detail: "Workspace soft-deleted",
+    });
+  });
+}
+
+/**
+ * Production ACID transaction: transfers ownership of workspace to another member.
+ */
+export async function transferWorkspaceOwnershipAtomic(
+  workspaceId: string,
+  currentOwnerId: string,
+  newOwnerId: string,
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [ws] = await tx
+      .select({ ownerUserId: schema.workspaces.ownerUserId })
+      .from(schema.workspaces)
+      .where(eq(schema.workspaces.id, workspaceId))
+      .limit(1);
+
+    if (!ws || ws.ownerUserId !== currentOwnerId) {
+      throw new Error("Only the current workspace owner can transfer ownership");
+    }
+
+    const [member] = await tx
+      .select()
+      .from(schema.workspaceMembers)
+      .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, newOwnerId)))
+      .limit(1);
+
+    if (!member) {
+      throw new Error("New owner must be an existing member of the workspace");
+    }
+
+    await tx
+      .update(schema.workspaces)
+      .set({ ownerUserId: newOwnerId, updatedAt: new Date() })
+      .where(eq(schema.workspaces.id, workspaceId));
+
+    await tx
+      .update(schema.workspaceMembers)
+      .set({ role: "owner" })
+      .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, newOwnerId)));
+
+    await tx
+      .update(schema.workspaceMembers)
+      .set({ role: "admin" })
+      .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, currentOwnerId)));
+
+    await tx.insert(schema.auditEvents).values({
+      id: crypto.randomUUID(),
+      workspaceId,
+      actorUserId: currentOwnerId,
+      action: "workspace.ownership_transferred",
+      detail: `Ownership transferred to user ${newOwnerId}`,
+    });
+  });
+}
+
 export async function getMemberRole(workspaceId: string, userId: string): Promise<string | null> {
   const [row] = await db
     .select({ role: schema.workspaceMembers.role })
@@ -360,3 +507,10 @@ export async function bumpTokenVersion(userId: string): Promise<string> {
     .where(eq(schema.users.id, userId));
   return newVersion;
 }
+
+// ── Re-exports for production database health, errors, and housekeeping ───────
+
+export * from "./health";
+export * from "./housekeeping";
+export * from "./errors";
+export { withDbRetry, closeDbPool, db, schema } from "./client";

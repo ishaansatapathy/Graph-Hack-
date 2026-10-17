@@ -201,28 +201,53 @@ export async function getInviteByToken(token: string): Promise<InviteDetails> {
 
 /** Accept an invite as the signed-in user. The user's email must match the invite. */
 export async function acceptInviteByToken(token: string, userId: string, userEmail: string) {
-  const inv = await findOpenInvite(token);
-  if (!inv) throw new UserError("This invite is invalid, expired, or already used");
-  if (inv.email.toLowerCase() !== userEmail.trim().toLowerCase()) {
-    throw new UserError(`This invite was sent to ${inv.email}. Sign in with that account to accept it.`);
-  }
+  return await db.transaction(async (tx) => {
+    const [inv] = await tx.select()
+      .from(schema.workspaceInvites)
+      .where(and(
+        eq(schema.workspaceInvites.token, token),
+        isNull(schema.workspaceInvites.acceptedAt),
+        gt(schema.workspaceInvites.expiresAt, new Date()),
+      ))
+      .limit(1);
 
-  // Mark accepted first (conditional) so concurrent clicks can't double-accept
-  const claimed = await db.update(schema.workspaceInvites)
-    .set({ acceptedAt: new Date() })
-    .where(and(eq(schema.workspaceInvites.id, inv.id), isNull(schema.workspaceInvites.acceptedAt)))
-    .returning({ id: schema.workspaceInvites.id });
-  if (claimed.length === 0) throw new UserError("This invite is invalid, expired, or already used");
+    if (!inv) throw new UserError("This invite is invalid, expired, or already used");
+    if (inv.email.toLowerCase() !== userEmail.trim().toLowerCase()) {
+      throw new UserError(`This invite was sent to ${inv.email}. Sign in with that account to accept it.`);
+    }
 
-  const already = await getMemberRole(inv.workspaceId, userId);
-  if (!already) {
-    await insertWorkspaceMember({ workspace_id: inv.workspaceId, user_id: userId, role: inv.role });
-  }
+    // Atomic conditional claim to prevent double-accept under concurrent requests
+    const claimed = await tx.update(schema.workspaceInvites)
+      .set({ acceptedAt: new Date() })
+      .where(and(eq(schema.workspaceInvites.id, inv.id), isNull(schema.workspaceInvites.acceptedAt)))
+      .returning({ id: schema.workspaceInvites.id });
 
-  await setActiveWorkspace(userId, inv.workspaceId);
+    if (claimed.length === 0) throw new UserError("This invite is invalid, expired, or already used");
 
-  log.info({ workspaceId: inv.workspaceId, userId }, "Invite accepted");
-  return { workspaceId: inv.workspaceId };
+    // Ensure member record exists
+    await tx.insert(schema.workspaceMembers).values({
+      workspaceId: inv.workspaceId,
+      userId,
+      role: inv.role,
+    }).onConflictDoNothing();
+
+    // Point user's active workspace to newly joined workspace
+    await tx.update(schema.users)
+      .set({ activeWorkspaceId: inv.workspaceId, updatedAt: new Date() })
+      .where(eq(schema.users.id, userId));
+
+    // Audit log
+    await tx.insert(schema.auditEvents).values({
+      id: crypto.randomUUID(),
+      workspaceId: inv.workspaceId,
+      actorUserId: userId,
+      action: "member.invite_accepted",
+      detail: `Accepted invitation as ${inv.role}`,
+    });
+
+    log.info({ workspaceId: inv.workspaceId, userId }, "Invite accepted atomically");
+    return { workspaceId: inv.workspaceId };
+  });
 }
 
 // ── Accept pending invites on sign-in ─────────────────────────────────────────
@@ -237,14 +262,36 @@ export async function acceptPendingInvites(userId: string, email: string): Promi
     ));
 
   for (const inv of invites) {
-    const alreadyMember = await getMemberRole(inv.workspaceId, userId);
-    if (!alreadyMember) {
-      await insertWorkspaceMember({ workspace_id: inv.workspaceId, user_id: userId, role: inv.role });
+    try {
+      await db.transaction(async (tx) => {
+        const claimed = await tx.update(schema.workspaceInvites)
+          .set({ acceptedAt: new Date() })
+          .where(and(eq(schema.workspaceInvites.id, inv.id), isNull(schema.workspaceInvites.acceptedAt)))
+          .returning({ id: schema.workspaceInvites.id });
+
+        if (claimed.length === 0) return;
+
+        await tx.insert(schema.workspaceMembers).values({
+          workspaceId: inv.workspaceId,
+          userId,
+          role: inv.role,
+        }).onConflictDoNothing();
+
+        await tx.update(schema.users)
+          .set({ activeWorkspaceId: inv.workspaceId, updatedAt: new Date() })
+          .where(eq(schema.users.id, userId));
+
+        await tx.insert(schema.auditEvents).values({
+          id: crypto.randomUUID(),
+          workspaceId: inv.workspaceId,
+          actorUserId: userId,
+          action: "member.invite_accepted",
+          detail: `Accepted pending invitation as ${inv.role}`,
+        });
+      });
+    } catch (err) {
+      log.warn({ err, inviteId: inv.id }, "Failed to auto-claim pending invite");
     }
-    await db.update(schema.workspaceInvites)
-      .set({ acceptedAt: new Date() })
-      .where(eq(schema.workspaceInvites.id, inv.id));
-    await setActiveWorkspace(userId, inv.workspaceId);
   }
 }
 
@@ -273,8 +320,36 @@ export async function removeMember(workspaceId: string, actorId: string, targetU
   if (targetRole === "owner") throw new UserError("The owner cannot be removed");
   if (targetUserId !== actorId) await assertAdmin(workspaceId, actorId);
 
-  await db.delete(schema.workspaceMembers)
-    .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, targetUserId)));
+  await db.transaction(async (tx) => {
+    await tx.delete(schema.workspaceMembers)
+      .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, targetUserId)));
+
+    // If removed member had this workspace active, re-point them to another workspace or null
+    const [user] = await tx.select({ activeId: schema.users.activeWorkspaceId })
+      .from(schema.users)
+      .where(eq(schema.users.id, targetUserId))
+      .limit(1);
+
+    if (user?.activeId === workspaceId) {
+      const [nextWs] = await tx.select({ workspaceId: schema.workspaceMembers.workspaceId })
+        .from(schema.workspaceMembers)
+        .where(eq(schema.workspaceMembers.userId, targetUserId))
+        .orderBy(schema.workspaceMembers.createdAt)
+        .limit(1);
+
+      await tx.update(schema.users)
+        .set({ activeWorkspaceId: nextWs?.workspaceId ?? null, updatedAt: new Date() })
+        .where(eq(schema.users.id, targetUserId));
+    }
+
+    await tx.insert(schema.auditEvents).values({
+      id: crypto.randomUUID(),
+      workspaceId,
+      actorUserId: actorId,
+      action: "member.removed",
+      detail: `Member ${targetUserId} removed`,
+    });
+  });
 
   return { ok: true };
 }

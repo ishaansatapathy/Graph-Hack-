@@ -33,15 +33,13 @@ export async function getOrCreateWorkspaceForUser(
     return { id: existing.id, name: existing.name, slug: existing.slug, role: toRole(role) };
   }
 
-  const id = crypto.randomUUID();
   const name = `${displayName.split(" ")[0] || "My"} workspace`;
-  let slug = workspaceDb.slugifyName(name);
-  if (await workspaceDb.findWorkspaceBySlug(slug)) slug = `${slug}-${id.slice(0, 6)}`;
+  const created = await workspaceDb.createWorkspaceAtomic({
+    userId,
+    name,
+  });
 
-  await workspaceDb.insertWorkspace({ id, name, slug, owner_user_id: userId, created_at: new Date().toISOString() });
-  await workspaceDb.insertWorkspaceMember({ workspace_id: id, user_id: userId, role: "owner" });
-
-  return { id, name, slug, role: "owner" };
+  return { id: created.id, name: created.name, slug: created.slug, role: "owner" };
 }
 
 export async function assertWorkspaceMember(workspaceId: string, userId: string): Promise<string> {

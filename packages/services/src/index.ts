@@ -46,3 +46,12 @@ export { checkDeviceQuota, getDeviceUsage } from "./ai/fingerprint";
 export { notifyNewConflicts } from "./conflict/notify";
 export { detectConflicts, markConflictResolved, type ConflictRecord } from "./conflict/detect";
 export { resolveConflict, type ResolveResult } from "./conflict/resolve";
+
+// ── Database Health & Operations ──────────────────────────────────────────
+export {
+  checkDatabaseHealth,
+  runDatabaseHousekeeping,
+  withDbRetry,
+  classifyDbError,
+  withDbErrorHandling,
+} from "./db";

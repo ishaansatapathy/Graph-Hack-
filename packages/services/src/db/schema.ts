@@ -1,8 +1,8 @@
 /**
  * Drizzle ORM schema — Stackfox production database (Neon/PostgreSQL)
  *
- * All tables that were previously in SQLite are now here.
- * Run `npm run db:push` to push schema to Neon.
+ * All tables with production-grade constraints, foreign-key cascades,
+ * composite query indexes, and soft-delete support.
  */
 
 import {
@@ -17,7 +17,7 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 
-// ── Enums ────────────────────────────────────────────────────────────────────
+// ── Enums ─────────────────────────────────────────────────────────────────────
 
 export const memberRoleEnum = pgEnum("member_role", ["owner", "admin", "member"]);
 export const integrationProviderEnum = pgEnum("integration_provider", ["github", "jira", "slack"]);
@@ -25,7 +25,7 @@ export const toolVisibilityEnum = pgEnum("tool_visibility", ["private", "workspa
 export const messageRoleEnum = pgEnum("message_role", ["user", "assistant", "system"]);
 export const syncStatusEnum = pgEnum("sync_status", ["running", "ok", "error"]);
 
-// ── Users ────────────────────────────────────────────────────────────────────
+// ── Users ─────────────────────────────────────────────────────────────────────
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
@@ -40,11 +40,12 @@ export const users = pgTable("users", {
   tokenVersion: text("token_version").notNull().default("0"),
   provider: text("provider").notNull().default("google"),
   providerId: text("provider_id"),
-  activeWorkspaceId: text("active_workspace_id"),
+  activeWorkspaceId: text("active_workspace_id").references((): any => workspaces.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   index("idx_users_email").on(t.email),
+  index("idx_users_provider").on(t.provider, t.providerId),
 ]);
 
 // ── Workspaces ────────────────────────────────────────────────────────────────
@@ -53,8 +54,9 @@ export const workspaces = pgTable("workspaces", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
-  ownerUserId: text("owner_user_id").notNull().references(() => users.id),
+  ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "restrict" }),
   plan: text("plan").notNull().default("free"),       // free | pro | enterprise
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
@@ -68,14 +70,15 @@ export const workspaceMembers = pgTable("workspace_members", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   role: memberRoleEnum("role").notNull().default("member"),
-  invitedByUserId: text("invited_by_user_id"),
+  invitedByUserId: text("invited_by_user_id").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   primaryKey({ columns: [t.workspaceId, t.userId] }),
   index("idx_members_user").on(t.userId),
+  index("idx_members_workspace").on(t.workspaceId),
 ]);
 
-// ── Workspace integrations ────────────────────────────────────────────────────
+// ── Workspace integrations ───────────────────────────────────────────────────
 
 export const workspaceIntegrations = pgTable("workspace_integrations", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
@@ -94,6 +97,7 @@ export const apiKeys = pgTable("api_keys", {
   name: text("name").notNull(),
   keyPrefix: text("key_prefix").notNull(),
   keyHash: text("key_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -102,12 +106,12 @@ export const apiKeys = pgTable("api_keys", {
   index("idx_apikeys_hash").on(t.keyHash),
 ]);
 
-// ── Workspace tools (shared integrations) ────────────────────────────────────
+// ── Workspace tools (shared integrations) ─────────────────────────────────────
 
 export const workspaceTools = pgTable("workspace_tools", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  ownerUserId: text("owner_user_id").notNull(),
+  ownerUserId: text("owner_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   kind: text("kind").notNull(),
   description: text("description").notNull().default(""),
@@ -118,20 +122,22 @@ export const workspaceTools = pgTable("workspace_tools", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   index("idx_tools_workspace").on(t.workspaceId),
+  index("idx_tools_owner").on(t.ownerUserId),
+  unique("uq_tools_workspace_name").on(t.workspaceId, t.name),
 ]);
 
 // ── Audit log ─────────────────────────────────────────────────────────────────
 
 export const auditEvents = pgTable("audit_events", {
   id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull(),
-  actorUserId: text("actor_user_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  actorUserId: text("actor_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   action: text("action").notNull(),
   toolId: text("tool_id"),
   detail: text("detail").notNull().default(""),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
-  index("idx_audit_workspace").on(t.workspaceId),
+  index("idx_audit_workspace_date").on(t.workspaceId, t.createdAt),
   index("idx_audit_actor").on(t.actorUserId),
 ]);
 
@@ -139,21 +145,21 @@ export const auditEvents = pgTable("audit_events", {
 
 export const agentMemory = pgTable("agent_memory", {
   id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull(),
-  userId: text("user_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   role: messageRoleEnum("role").notNull(),
   content: text("content").notNull(),
   tokenCount: integer("token_count").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
-  index("idx_memory_workspace_user").on(t.workspaceId, t.userId),
+  index("idx_memory_workspace_user_date").on(t.workspaceId, t.userId, t.createdAt),
 ]);
 
 // ── Sync runs ─────────────────────────────────────────────────────────────────
 
 export const syncRuns = pgTable("sync_runs", {
   id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   provider: text("provider").notNull(),
   status: syncStatusEnum("status").notNull().default("running"),
   items: integer("items").notNull().default(0),
@@ -161,7 +167,7 @@ export const syncRuns = pgTable("sync_runs", {
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
 }, (t) => [
-  index("idx_syncruns_workspace").on(t.workspaceId),
+  index("idx_syncruns_workspace_provider_date").on(t.workspaceId, t.provider, t.startedAt),
 ]);
 
 // ── Device quota (fingerprint-based rate limiting) ────────────────────────────
@@ -172,14 +178,15 @@ export const deviceQuota = pgTable("device_quota", {
   requests: integer("requests").notNull().default(0),
 }, (t) => [
   primaryKey({ columns: [t.fpHash, t.windowStart] }),
+  index("idx_devicequota_window").on(t.windowStart),
 ]);
 
 // ── AI usage / billing ────────────────────────────────────────────────────────
 
 export const aiUsage = pgTable("ai_usage", {
   id: text("id").primaryKey(),
-  workspaceId: text("workspace_id").notNull(),
-  userId: text("user_id").notNull(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   model: text("model").notNull(),
   promptTokens: integer("prompt_tokens").notNull().default(0),
   completionTokens: integer("completion_tokens").notNull().default(0),
@@ -187,8 +194,8 @@ export const aiUsage = pgTable("ai_usage", {
   featureTag: text("feature_tag").notNull().default("ask"),  // "ask" | "conflict_resolve" | ...
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
-  index("idx_aiusage_workspace").on(t.workspaceId),
-  index("idx_aiusage_date").on(t.createdAt),
+  index("idx_aiusage_workspace_date").on(t.workspaceId, t.createdAt),
+  index("idx_aiusage_user_date").on(t.userId, t.createdAt),
 ]);
 
 // ── Workspace invites ─────────────────────────────────────────────────────────
@@ -196,7 +203,7 @@ export const aiUsage = pgTable("ai_usage", {
 export const workspaceInvites = pgTable("workspace_invites", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  invitedByUserId: text("invited_by_user_id").notNull(),
+  invitedByUserId: text("invited_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   email: text("email").notNull(),
   role: memberRoleEnum("role").notNull().default("member"),
   token: text("token").notNull().unique(),
@@ -206,6 +213,7 @@ export const workspaceInvites = pgTable("workspace_invites", {
 }, (t) => [
   unique("uq_invite_workspace_email").on(t.workspaceId, t.email),
   index("idx_invite_token").on(t.token),
+  index("idx_invite_lookup").on(t.workspaceId, t.email, t.acceptedAt),
 ]);
 
 // ── Conflict notifications (dedupe so each conflict emails once) ──────────────

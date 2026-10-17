@@ -4,6 +4,8 @@ import express from "express";
 import * as trpcExpress from "@trpc/server/adapters/express";
 import { createContext, serverRouter } from "@stackfox/trpc/server";
 
+import { checkDatabaseHealth } from "@stackfox/services";
+
 import { env } from "./env";
 import { githubWebhookRouter } from "./routes/github-webhook";
 import { googleAuthRouter } from "./routes/google-auth";
@@ -23,9 +25,21 @@ app.use(express.json({ limit: "2mb" }));
 
 app.get("/", (_req, res) => {
   res.json({
-    name: "Graph Hack API",
+    name: "Stackfox API",
     trpc: "/trpc",
+    health: "/health",
     auth: "/auth/google/callback",
+  });
+});
+
+app.get("/health", async (_req, res) => {
+  const dbHealth = await checkDatabaseHealth();
+  const statusCode = dbHealth.status === "healthy" || dbHealth.status === "degraded" ? 200 : 503;
+  res.status(statusCode).json({
+    status: dbHealth.status,
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    database: dbHealth,
   });
 });
 

@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import { and, desc, eq, isNull, or } from "drizzle-orm";
 
 import { db, schema } from "../db/client";
+import { withDbErrorHandling } from "../db/errors";
+import { UserError } from "../errors";
 import * as graphEngine from "../graph/engine";
 import { childLogger } from "../logger";
 import { recordAudit } from "./audit";
@@ -102,21 +104,36 @@ export async function createTool(
   input: { name: string; kind: ToolKind; description?: string },
 ) {
   await memberRole(workspaceId, userId);
-  if (!TOOL_CATALOG[input.kind]) throw new Error("Unknown tool kind");
+  if (!TOOL_CATALOG[input.kind]) throw new UserError("Unknown tool kind");
 
-  const id = crypto.randomUUID();
-  const [row] = await db.insert(schema.workspaceTools).values({
-    id,
-    workspaceId,
-    ownerUserId: userId,
-    name: input.name.trim(),
-    kind: input.kind,
-    description: input.description?.trim() || TOOL_CATALOG[input.kind].description,
-    visibility: "private",
-  }).returning();
+  const trimmedName = input.name.trim();
+  if (!trimmedName) throw new UserError("Tool name cannot be empty");
 
-  recordAudit(workspaceId, userId, "tool.created", id, input.name);
-  return toPublic(row!, userId);
+  return await withDbErrorHandling(async () => {
+    return await db.transaction(async (tx) => {
+      const id = crypto.randomUUID();
+      const [row] = await tx.insert(schema.workspaceTools).values({
+        id,
+        workspaceId,
+        ownerUserId: userId,
+        name: trimmedName,
+        kind: input.kind,
+        description: input.description?.trim() || TOOL_CATALOG[input.kind].description,
+        visibility: "private",
+      }).returning();
+
+      await tx.insert(schema.auditEvents).values({
+        id: crypto.randomUUID(),
+        workspaceId,
+        actorUserId: userId,
+        action: "tool.created",
+        toolId: id,
+        detail: trimmedName,
+      });
+
+      return toPublic(row!, userId);
+    });
+  });
 }
 
 export async function setToolVisibility(
