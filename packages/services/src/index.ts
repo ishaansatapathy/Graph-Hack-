@@ -22,7 +22,25 @@ export { githubWebhookUrl, getApiPublicUrl } from "./integrations/config";
 export * as graphEngine from "./graph/engine";
 export { graphRagAnswer } from "./graph/rag";
 export * as agentMemory from "./graph/memory";
+export * as graphChunks from "./graph/chunks";
 export { triggerSync, syncDb } from "./sync";
 export { githubPushPayloadSchema } from "./github/push-schema";
 export { verifyGithubSignature } from "./github/verify";
 export type { WorkspacePublic } from "./workspace";
+
+// ── AI ────────────────────────────────────────────────────────────────────
+export {
+  complete,
+  completeWithGraphContext,
+  classifyTask,
+  modelForTask,
+  checkRateLimit,
+  type Message,
+  type CompletionResult,
+  type TaskComplexity,
+} from "./ai/router";
+export { checkDeviceQuota, getDeviceUsage } from "./ai/fingerprint";
+
+// ── Conflict ──────────────────────────────────────────────────────────────
+export { detectConflicts, markConflictResolved, type ConflictRecord } from "./conflict/detect";
+export { resolveConflict, type ResolveResult } from "./conflict/resolve";
