@@ -39,6 +39,7 @@ const envSchema = z.object({
   FALKORDB_PORT: z.string().optional(),
   FALKORDB_GRAPH: z.string().optional(),
   FALKORDB_PASSWORD: z.preprocess(emptyToUndefined, z.string().optional()),
+  OPENAI_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
 });
 
 function createEnv(env: NodeJS.ProcessEnv) {
