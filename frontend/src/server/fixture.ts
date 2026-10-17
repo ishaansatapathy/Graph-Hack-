@@ -11,8 +11,8 @@ import type {
 
 /* ------------------------------------------------------------------
    Demo scenario fixture.
-   Stands in for the SYNK backend (FalkorDB + MCP server) when
-   SYNK_BACKEND_URL is not configured. Shape matches what the backend
+   Stands in for the Stackfox backend (FalkorDB + MCP server) when
+   STACKFOX_BACKEND_URL is not configured. Shape matches what the backend
    is expected to emit on GET /scenario and GET /events, so UI code is
    identical in both modes.
    ------------------------------------------------------------------ */
@@ -224,7 +224,7 @@ export async function notifyUser(userId: string, msg: string) {
 
 export const snapshot: ScenarioSnapshot = {
   sessionId: "S-0917",
-  graphName: "synk:checkout-service",
+  graphName: "stackfox:checkout-service",
   repo: "acme/checkout-service",
   agents: [
     { id: "agent-a", name: "Agent A", slot: "a", branch: "agent-a/rename-user-email", model: "coding-agent", task: "Rename User.email to primaryEmail across the API", status: "idle" },
@@ -302,7 +302,7 @@ const run = (id: string, testNodeId: string, name: string, phase: "detect" | "re
 });
 
 const steps: Step[] = [
-  { at: 0, actor: "synk", kind: "system", message: "Session S-0917 opened · graph synk:checkout-service · 25 nodes · 28 edges", patches: [{ op: "phase", phase: "working" }] },
+  { at: 0, actor: "stackfox", kind: "system", message: "Session S-0917 opened · graph stackfox:checkout-service · 25 nodes · 28 edges", patches: [{ op: "phase", phase: "working" }] },
   { at: 900, actor: "agent-a", kind: "action", message: "Started on agent-a/rename-user-email", patches: [{ op: "agent", id: "agent-a", status: "working" }] },
   { at: 1300, actor: "agent-b", kind: "action", message: "Started on agent-b/receipt-emails", patches: [{ op: "agent", id: "agent-b", status: "working" }] },
   { at: 1700, actor: "agent-c", kind: "action", message: "Started on agent-c/notify-prefs", patches: [{ op: "agent", id: "agent-c", status: "working" }] },
@@ -325,20 +325,20 @@ const steps: Step[] = [
   { at: 15000, actor: "ci", kind: "test", message: "CI · 3/3 branch suites green · ready to deploy" },
 
   // detection
-  { at: 16600, actor: "synk", kind: "tool_call", tool: "rank_change_risk", args: { changes: ["PC-A1", "PC-B1", "PC-C1"] }, message: "rank_change_risk" },
-  { at: 17200, actor: "synk", kind: "tool_result", tool: "rank_change_risk", durationMs: 23, result: [{ PC_A1: 0.91 }, { PC_B1: 0.64 }, { PC_C1: 0.22 }], message: "PC-A1 0.91 · PC-B1 0.64 · PC-C1 0.22", patches: [{ op: "risk", ranks: [{ changeId: "PC-A1", risk: 0.91 }, { changeId: "PC-B1", risk: 0.64 }, { changeId: "PC-C1", risk: 0.22 }] }] },
+  { at: 16600, actor: "stackfox", kind: "tool_call", tool: "rank_change_risk", args: { changes: ["PC-A1", "PC-B1", "PC-C1"] }, message: "rank_change_risk" },
+  { at: 17200, actor: "stackfox", kind: "tool_result", tool: "rank_change_risk", durationMs: 23, result: [{ PC_A1: 0.91 }, { PC_B1: 0.64 }, { PC_C1: 0.22 }], message: "PC-A1 0.91 · PC-B1 0.64 · PC-C1 0.22", patches: [{ op: "risk", ranks: [{ changeId: "PC-A1", risk: 0.91 }, { changeId: "PC-B1", risk: 0.64 }, { changeId: "PC-C1", risk: 0.22 }] }] },
   {
-    at: 18200, actor: "synk", kind: "recall", message: "Recalled: INC-0412 — field rename on a serialized schema broke the iOS client (session S-0812)",
+    at: 18200, actor: "stackfox", kind: "recall", message: "Recalled: INC-0412 — field rename on a serialized schema broke the iOS client (session S-0812)",
     patches: [
       { op: "incident", incident: { id: "INC-0412", title: "Field rename on Order broke iOS client", summary: "Order.total_cents renamed to Order.total; mobile client still read total_cents. Caught in prod after 41 min.", occurredAt: "2026-08-12T14:20:00Z", sessionId: "S-0812", nodeId: "inc:0412", recalled: true } },
       { op: "edge", edge: { id: "inc:0412|SIMILAR_TO|pc:a", source: "inc:0412", target: "pc:a", kind: "SIMILAR_TO" } },
       { op: "pulse", nodeIds: ["inc:0412", "pc:a"] },
     ],
   },
-  { at: 19800, actor: "synk", kind: "tool_call", tool: "find_consumers", args: { node: "User.email", depth: 4, include_pending: true }, message: "find_consumers", patches: [{ op: "focus", nodeIds: ["f:user.email", "sc:user", "ep:get-user", "fn:fetchUser", "fn:sendReceipt"] }] },
-  { at: 20400, actor: "synk", kind: "tool_result", tool: "find_consumers", durationMs: 17, result: ["serializeUser()", "fetchUser()", "notifyUser() [PC-C1 adapted]", "sendReceipt() [PC-B1 pending]"], message: "4 consumers · 1 unadapted" },
+  { at: 19800, actor: "stackfox", kind: "tool_call", tool: "find_consumers", args: { node: "User.email", depth: 4, include_pending: true }, message: "find_consumers", patches: [{ op: "focus", nodeIds: ["f:user.email", "sc:user", "ep:get-user", "fn:fetchUser", "fn:sendReceipt"] }] },
+  { at: 20400, actor: "stackfox", kind: "tool_result", tool: "find_consumers", durationMs: 17, result: ["serializeUser()", "fetchUser()", "notifyUser() [PC-C1 adapted]", "sendReceipt() [PC-B1 pending]"], message: "4 consumers · 1 unadapted" },
   {
-    at: 21800, actor: "synk", kind: "conflict", message: "Contract drift · PC-B1 reads User.email, which PC-A1 removes",
+    at: 21800, actor: "stackfox", kind: "conflict", message: "Contract drift · PC-B1 reads User.email, which PC-A1 removes",
     patches: [
       { op: "phase", phase: "conflict" },
       { op: "change", id: "PC-A1", status: "conflict" },
@@ -349,13 +349,13 @@ const steps: Step[] = [
   },
 
   // evidence
-  { at: 23400, actor: "synk", kind: "tool_call", tool: "evidence_path", args: { from: "PC-A1", to: "PC-B1" }, message: "evidence_path" },
-  { at: 24000, actor: "synk", kind: "tool_result", tool: "evidence_path", durationMs: 9, result: { hops: 6, path: "PC-A1 → User.email → UserSchema → GET /api/users/:id → fetchUser() → sendReceipt() → PC-B1" }, message: "6 hops", patches: [{ op: "phase", phase: "evidence" }, { op: "evidence", path: evidence }] },
+  { at: 23400, actor: "stackfox", kind: "tool_call", tool: "evidence_path", args: { from: "PC-A1", to: "PC-B1" }, message: "evidence_path" },
+  { at: 24000, actor: "stackfox", kind: "tool_result", tool: "evidence_path", durationMs: 9, result: { hops: 6, path: "PC-A1 → User.email → UserSchema → GET /api/users/:id → fetchUser() → sendReceipt() → PC-B1" }, message: "6 hops", patches: [{ op: "phase", phase: "evidence" }, { op: "evidence", path: evidence }] },
 
   // targeted tests
-  { at: 30500, actor: "synk", kind: "tool_call", tool: "tests_for_path", args: { nodes: ["sc:user", "ep:get-user", "fn:fetchUser", "fn:sendReceipt"] }, message: "tests_for_path" },
+  { at: 30500, actor: "stackfox", kind: "tool_call", tool: "tests_for_path", args: { nodes: ["sc:user", "ep:get-user", "fn:fetchUser", "fn:sendReceipt"] }, message: "tests_for_path" },
   {
-    at: 31000, actor: "synk", kind: "tool_result", tool: "tests_for_path", durationMs: 12, result: ["users.serialize.test.ts", "receipts.contract.test.ts", "checkout.e2e.test.ts"], message: "3 of 412 tests selected",
+    at: 31000, actor: "stackfox", kind: "tool_result", tool: "tests_for_path", durationMs: 12, result: ["users.serialize.test.ts", "receipts.contract.test.ts", "checkout.e2e.test.ts"], message: "3 of 412 tests selected",
     patches: [
       { op: "phase", phase: "tests" },
       run("serialize", "t:user-serialize", "users.serialize.test.ts", "detect", "queued"),
@@ -363,18 +363,18 @@ const steps: Step[] = [
       run("e2e", "t:checkout-e2e", "checkout.e2e.test.ts", "detect", "queued"),
     ],
   },
-  { at: 32000, actor: "synk", kind: "action", message: "Running 3 targeted tests on merged main", patches: [run("serialize", "t:user-serialize", "users.serialize.test.ts", "detect", "running"), run("contract", "t:receipt-contract", "receipts.contract.test.ts", "detect", "running"), run("e2e", "t:checkout-e2e", "checkout.e2e.test.ts", "detect", "running")] },
+  { at: 32000, actor: "stackfox", kind: "action", message: "Running 3 targeted tests on merged main", patches: [run("serialize", "t:user-serialize", "users.serialize.test.ts", "detect", "running"), run("contract", "t:receipt-contract", "receipts.contract.test.ts", "detect", "running"), run("e2e", "t:checkout-e2e", "checkout.e2e.test.ts", "detect", "running")] },
   { at: 33300, actor: "ci", kind: "test", message: "✓ users.serialize.test.ts · 312ms", patches: [run("serialize", "t:user-serialize", "users.serialize.test.ts", "detect", "pass", { durationMs: 312 })] },
   { at: 34700, actor: "ci", kind: "test", message: "✗ receipts.contract.test.ts · TypeError: Cannot read properties of undefined (reading 'toLowerCase')", patches: [run("contract", "t:receipt-contract", "receipts.contract.test.ts", "detect", "fail", { durationMs: 488, message: "TypeError: Cannot read properties of undefined (reading 'toLowerCase')\n  at sendReceipt (billing/receipts.ts:7:24)\n  response keys: id, name, primaryEmail, createdAt" }), { op: "pulse", nodeIds: ["t:receipt-contract"] }] },
   { at: 36000, actor: "ci", kind: "test", message: "✗ checkout.e2e.test.ts · receipt not sent: recipient undefined", patches: [run("e2e", "t:checkout-e2e", "checkout.e2e.test.ts", "detect", "fail", { durationMs: 1904, message: "AssertionError: expected mailer.send to be called with { to: 'ada@acme.dev' }\n  received: { to: undefined }" }), { op: "pulse", nodeIds: ["t:checkout-e2e"] }] },
-  { at: 37400, actor: "synk", kind: "tool_call", tool: "blast_radius", args: { node: "User.email" }, message: "blast_radius" },
-  { at: 37800, actor: "synk", kind: "tool_result", tool: "blast_radius", durationMs: 10, result: { endpoints: 2, functions: 4, tests: 4 }, message: "2 endpoints · 4 functions · 4 tests" },
+  { at: 37400, actor: "stackfox", kind: "tool_call", tool: "blast_radius", args: { node: "User.email" }, message: "blast_radius" },
+  { at: 37800, actor: "stackfox", kind: "tool_result", tool: "blast_radius", durationMs: 10, result: { endpoints: 2, functions: 4, tests: 4 }, message: "2 endpoints · 4 functions · 4 tests" },
 
   // fix
-  { at: 39500, actor: "synk", kind: "fix", message: "Proposed FX-1 for agent-b/receipt-emails: read user.primaryEmail", patches: [{ op: "phase", phase: "fix" }, { op: "fix", fix: { ...fix, status: "proposed" } }, { op: "focus", nodeIds: ["fn:sendReceipt", "pc:b"] }] },
+  { at: 39500, actor: "stackfox", kind: "fix", message: "Proposed FX-1 for agent-b/receipt-emails: read user.primaryEmail", patches: [{ op: "phase", phase: "fix" }, { op: "fix", fix: { ...fix, status: "proposed" } }, { op: "focus", nodeIds: ["fn:sendReceipt", "pc:b"] }] },
   { at: 42500, actor: "agent-b", kind: "action", message: "Applied FX-1 to agent-b/receipt-emails", patches: [{ op: "fix", fix: { ...fix, status: "applied" } }, { op: "agent", id: "agent-b", status: "working" }] },
   {
-    at: 44000, actor: "synk", kind: "action", message: "Re-verifying the same 3 targeted tests",
+    at: 44000, actor: "stackfox", kind: "action", message: "Re-verifying the same 3 targeted tests",
     patches: [
       { op: "fix", fix: { ...fix, status: "verifying" } },
       run("serialize", "t:user-serialize", "users.serialize.test.ts", "reverify", "running"),
@@ -386,7 +386,7 @@ const steps: Step[] = [
   { at: 46500, actor: "ci", kind: "test", message: "✓ receipts.contract.test.ts · 451ms", patches: [run("contract", "t:receipt-contract", "receipts.contract.test.ts", "reverify", "pass", { durationMs: 451 }), { op: "pulse", nodeIds: ["t:receipt-contract"] }] },
   { at: 48000, actor: "ci", kind: "test", message: "✓ checkout.e2e.test.ts · 1.71s", patches: [run("e2e", "t:checkout-e2e", "checkout.e2e.test.ts", "reverify", "pass", { durationMs: 1712 }), { op: "pulse", nodeIds: ["t:checkout-e2e"] }] },
   {
-    at: 49500, actor: "synk", kind: "verified", message: "Verified · 3/3 targeted tests pass on merged main · merge unblocked",
+    at: 49500, actor: "stackfox", kind: "verified", message: "Verified · 3/3 targeted tests pass on merged main · merge unblocked",
     patches: [
       { op: "phase", phase: "verified" },
       { op: "fix", fix: { ...fix, status: "verified" } },
@@ -399,7 +399,7 @@ const steps: Step[] = [
     ],
   },
   {
-    at: 51500, actor: "synk", kind: "recall", message: "Stored INC-0917 · contract drift on User.email (PC-A1 × PC-B1) for future sessions",
+    at: 51500, actor: "stackfox", kind: "recall", message: "Stored INC-0917 · contract drift on User.email (PC-A1 × PC-B1) for future sessions",
     patches: [
       { op: "node", node: { id: "inc:0917", kind: "incident", label: "INC-0917", centrality: 0.2 } },
       { op: "edge", edge: { id: "inc:0917|INVOLVED|f:user.email", source: "inc:0917", target: "f:user.email", kind: "INVOLVED" } },
@@ -407,7 +407,7 @@ const steps: Step[] = [
       { op: "pulse", nodeIds: ["inc:0917"] },
     ],
   },
-  { at: 53000, actor: "synk", kind: "system", message: "Session complete · 1 conflict caught · 1 prevented · 1 incident recalled · 1 stored" },
+  { at: 53000, actor: "stackfox", kind: "system", message: "Session complete · 1 conflict caught · 1 prevented · 1 incident recalled · 1 stored" },
 ];
 
 export const script: StreamEvent[] = steps.map(({ patches = [], ...log }, i) => ({

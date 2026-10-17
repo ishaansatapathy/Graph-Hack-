@@ -39,7 +39,7 @@ interface Entry {
 function defineTheme(monaco: Monaco) {
   const t = readTokens();
   const hex = (v: string) => v.replace("#", "");
-  monaco.editor.defineTheme("synk", {
+  const themeData: Parameters<Monaco["editor"]["defineTheme"]>[1] = {
     base: "vs-dark",
     inherit: true,
     rules: [
@@ -72,7 +72,9 @@ function defineTheme(monaco: Monaco) {
       "editorWidget.background": t["surface-2"],
       "editorWidget.border": t["line-strong"],
     },
-  });
+  };
+  monaco.editor.defineTheme("stackfox", themeData);
+  monaco.editor.defineTheme("synk", themeData);
 }
 
 export function CodeTab({ files, fix, selectedNode, agents, active }: { files: CodeFile[]; fix: FixProposal | null; selectedNode: GraphNode | null; agents: Agent[]; active: boolean }) {
@@ -160,7 +162,7 @@ export function CodeTab({ files, fix, selectedNode, agents, active }: { files: C
             original={entry.file.original}
             modified={entry.file.modified}
             language={entry.file.language}
-            theme="synk"
+            theme="stackfox"
             beforeMount={defineTheme}
             onMount={(ed) => {
               const mono = getComputedStyle(document.documentElement).getPropertyValue("--font-geist-mono").trim();

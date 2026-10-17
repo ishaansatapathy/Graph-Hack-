@@ -1,5 +1,5 @@
 {
-  "name": "graph-hack",
+  "name": "stackfox-backend",
   "version": "0.0.1",
   "private": true,
   "workspaces": [
@@ -7,8 +7,9 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @stackfox/api\" \"npm run dev -w @stackfox/web\"",
+    "dev": "npm run dev -w @stackfox/api",
     "dev:api": "npm run dev -w @stackfox/api",
+    "dev:all": "concurrently -n api,web -c blue,magenta \"npm run dev -w @stackfox/api\" \"npm run dev -w @stackfox/web\"",
     "dev:web": "npm run dev -w @stackfox/web",
     "check-types": "npm run check-types -w @stackfox/services && npm run check-types -w @stackfox/trpc && npm run check-types -w @stackfox/api && npm run check-types -w @stackfox/web",
     "db:up": "docker compose up -d",

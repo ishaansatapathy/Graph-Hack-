@@ -1,6 +1,6 @@
 import type { ApiError, ScenarioSnapshot, StreamEvent } from "./types";
 
-/** Single client for every SYNK endpoint the UI talks to. */
+/** Single client for every Stackfox endpoint the UI talks to. */
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status: number) {

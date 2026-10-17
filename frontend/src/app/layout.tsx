@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SYNK — coordination layer for AI coding agents",
+  title: "Stackfox — coordination layer for AI coding agents",
   description:
-    "Git merged it. CI passed. Production would have broken. SYNK models every agent's pending change as a graph in FalkorDB and catches the incompatibility before merge.",
+    "Git merged it. CI passed. Production would have broken. Stackfox models every agent's pending change as a graph in FalkorDB and catches the incompatibility before merge.",
 };
 
 export const viewport: Viewport = {

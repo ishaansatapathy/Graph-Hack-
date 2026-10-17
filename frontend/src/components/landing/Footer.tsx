@@ -23,9 +23,9 @@ export function Footer() {
         <div className="mx-auto flex max-w-[1200px] flex-wrap items-center justify-between gap-4 px-6 py-6 text-[12.5px] text-fg-3 md:px-10">
           <span className="flex items-center gap-2">
             <Logo className="size-4 text-fg-2" />
-            <span className="font-semibold tracking-[0.12em] text-fg-2">SYNK</span>
+            <span className="font-semibold tracking-[0.12em] text-fg-2">STACKFOX</span>
           </span>
-          <span>Built for Graph Hacks with FalkorDB</span>
+          <span>Stackfox — Real-Time Knowledge Graph & Multi-Agent Coordination with FalkorDB</span>
         </div>
       </div>
     </footer>

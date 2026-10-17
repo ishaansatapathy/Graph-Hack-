@@ -1,4 +1,4 @@
-/* Shared contract between the SYNK backend and the UI.
+/* Shared contract between the Stackfox backend and the UI.
    The UI never constructs these values itself — they arrive from /api/*. */
 
 export type AgentSlot = "a" | "b" | "c";
@@ -137,7 +137,7 @@ export interface CodeFile {
   anchors: CodeAnchor[];
 }
 
-export type Actor = string; // agent id | "synk" | "git" | "ci"
+export type Actor = string; // agent id | "stackfox" | "synk" | "git" | "ci"
 
 export type LogKind =
   | "system"

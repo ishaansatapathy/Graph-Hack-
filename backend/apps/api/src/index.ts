@@ -9,6 +9,7 @@ import { checkDatabaseHealth } from "@stackfox/services";
 import { env } from "./env";
 import { githubWebhookRouter } from "./routes/github-webhook";
 import { googleAuthRouter } from "./routes/google-auth";
+import { scenarioRouter } from "./routes/scenario";
 
 const PORT = Number(process.env.PORT ?? 8000);
 
@@ -23,11 +24,15 @@ app.use(cookieParser());
 app.use("/webhooks/github", githubWebhookRouter);
 app.use(express.json({ limit: "2mb" }));
 
+app.use(scenarioRouter);
+
 app.get("/", (_req, res) => {
   res.json({
     name: "Stackfox API",
     trpc: "/trpc",
     health: "/health",
+    scenario: "/scenario",
+    events: "/events",
     auth: "/auth/google/callback",
   });
 });

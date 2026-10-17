@@ -144,7 +144,7 @@ export function HowItSees() {
       <div data-hpin className="relative flex min-h-[100svh] items-center overflow-hidden">
         <div className="mx-auto grid w-full max-w-[1200px] items-center gap-10 px-6 md:px-10 lg:grid-cols-[300px_minmax(0,1fr)]">
           <div>
-            <p className="eyebrow">How SYNK sees it</p>
+            <p className="eyebrow">How Stackfox sees it</p>
             <div className="relative mt-5 min-h-[170px] motion-reduce:min-h-0 motion-reduce:space-y-5">
               {CAPTIONS.map((c, i) => (
                 <div key={i} data-hcap={i} className="absolute inset-x-0 top-0 opacity-0 motion-reduce:relative">

@@ -1,4 +1,4 @@
-/** SYNK mark: three agent nodes converging on one shared node. */
+/** Stackfox mark: three agent nodes converging on one shared node. */
 export function Logo({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>

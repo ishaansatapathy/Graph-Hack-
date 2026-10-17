@@ -124,7 +124,7 @@ export function Features() {
   return (
     <section id="features" ref={root} className="relative py-32 md:py-40">
       <div className="mx-auto max-w-[1200px] px-6 md:px-10">
-        <p className="eyebrow">What SYNK does</p>
+        <p className="eyebrow">What Stackfox does</p>
         <h2 className="mt-4 max-w-[20ch] text-[clamp(32px,4vw,56px)] font-semibold leading-[1.02] tracking-[-0.04em]">
           Read the graph before you write.
         </h2>
@@ -141,7 +141,7 @@ export function Features() {
               {[
                 ["agent-a", "text-agent-a", "impact_of_change", "PC-A1", "2 nodes · 1 endpoint"],
                 ["agent-c", "text-agent-c", "pending_changes_by_others", "notify.ts", "1 overlapping"],
-                ["synk", "text-synk", "evidence_path", "PC-A1 → PC-B1", "6 hops"],
+                ["stackfox", "text-accent", "evidence_path", "PC-A1 → PC-B1", "6 hops"],
               ].map(([who, cls, tool, arg, res]) => (
                 <div key={tool} data-call className="flex gap-3 whitespace-nowrap">
                   <span className={cn("w-14 shrink-0", cls)}>{who}</span>

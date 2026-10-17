@@ -4,7 +4,7 @@ import type { Agent } from "@/lib/types";
 export function actorStyle(actor: string, agents: Agent[]) {
   const a = agents.find((x) => x.id === actor);
   if (a) return { label: a.name.replace("Agent ", "agent-").toLowerCase(), text: AGENT_STYLE[a.slot].text, dot: AGENT_STYLE[a.slot].dot };
-  if (actor === "synk") return { label: "synk", text: "text-synk", dot: "bg-synk" };
+  if (actor === "stackfox" || actor === "synk") return { label: "stackfox", text: "text-accent", dot: "bg-accent" };
   return { label: actor, text: "text-fg-2", dot: "bg-fg-3" };
 }
 

@@ -44,9 +44,9 @@ export function TopBar({
 
   return (
     <header className="relative z-10 flex h-12 items-center gap-4 border-b border-line bg-surface-1 px-4">
-      <Link href="/" className="flex items-center gap-2 text-fg" aria-label="SYNK home">
+      <Link href="/" className="flex items-center gap-2 text-fg" aria-label="Stackfox home">
         <Logo className="size-[18px] text-accent" />
-        <span className="text-[13px] font-semibold tracking-[0.12em]">SYNK</span>
+        <span className="text-[13px] font-semibold tracking-[0.12em]">STACKFOX</span>
       </Link>
       <span className="h-4 w-px bg-line-strong" />
       <div className="hidden min-w-0 items-center gap-2 font-mono text-[11.5px] text-fg-3 xl:flex">

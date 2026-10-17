@@ -2,13 +2,13 @@ import "server-only";
 import type { ScenarioSnapshot } from "@/lib/types";
 import { script, snapshot } from "./fixture";
 
-/** When set, the API routes proxy to the SYNK backend (FalkorDB-backed).
+/** When set, the API routes proxy to the Stackfox backend (FalkorDB-backed).
     Otherwise the built-in demo scenario is served. */
-const BACKEND = process.env.SYNK_BACKEND_URL?.replace(/\/$/, "");
+const BACKEND = (process.env.STACKFOX_BACKEND_URL ?? process.env.SYNK_BACKEND_URL)?.replace(/\/$/, "");
 
 const unreachable = (err: unknown) =>
   new Error(
-    `SYNK backend not reachable at ${BACKEND}. ` +
+    `Stackfox backend not reachable at ${BACKEND}. ` +
       `(${err instanceof Error ? err.message : String(err)})`,
   );
 

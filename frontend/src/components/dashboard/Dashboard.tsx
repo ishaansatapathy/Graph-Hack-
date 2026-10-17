@@ -86,7 +86,7 @@ export function Dashboard() {
         <div className="surface max-w-sm p-6 text-center">
           <p className="text-[14px] font-medium text-fg">The dashboard needs a wider window</p>
           <p className="mt-2 text-[13px] leading-relaxed text-fg-2">
-            Graph, agents, inspector and event log run side by side. Open SYNK at 1100px or wider to watch the run.
+            Graph, agents, inspector and event log run side by side. Open Stackfox at 1100px or wider to watch the run.
           </p>
         </div>
       </div>
