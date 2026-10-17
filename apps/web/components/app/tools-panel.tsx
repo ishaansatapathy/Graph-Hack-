@@ -67,7 +67,7 @@ export function ToolsPanel({ workspaceId }: { workspaceId: string }) {
     try {
       const raw = callArgs[tool.id]?.trim() || "{}";
       const args = JSON.parse(raw) as Record<string, unknown>;
-      const res = await trpc.workspace.tools.call.mutate({ workspaceId, toolId: tool.id, args });
+      const res = await trpc.workspace.tools.execute.mutate({ workspaceId, toolId: tool.id, args });
       setCallOut((o) => ({
         ...o,
         [tool.id]: `// ${res.cypher}\n${JSON.stringify(res.rows, null, 2)}`,

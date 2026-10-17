@@ -409,7 +409,7 @@ export const workspaceRouter = router({
         }
       }),
 
-    call: protectedProcedure
+    execute: protectedProcedure
       .input(
         z.object({
           workspaceId: z.string().uuid(),
