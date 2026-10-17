@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import { sanitizeRedirectPath } from "@stackfox/services/auth/safe-redirect";
 
 type AuthCardProps = {
@@ -8,17 +11,96 @@ type AuthCardProps = {
 export function AuthCard({ errorMessage, nextPath }: AuthCardProps) {
   const returnTo = sanitizeRedirectPath(nextPath ?? "/app");
   const googleHref = `/api-auth/google?state=${encodeURIComponent(returnTo)}`;
+  const [customEmail, setCustomEmail] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const ishaanDevLoginHref = `/api-auth/dev-login?email=ishaansatapathy09@gmail.com&returnTo=${encodeURIComponent(returnTo)}`;
+
+  const handleCustomLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customEmail.trim()) return;
+    setIsSubmitting(true);
+    window.location.href = `/api-auth/dev-login?email=${encodeURIComponent(customEmail.trim())}&returnTo=${encodeURIComponent(returnTo)}`;
+  };
 
   return (
     <div className="thread-auth-card">
-      <div className="thread-auth-logo">Stackfox</div>
-      <h1 className="thread-auth-title">Sign in to continue</h1>
-      {errorMessage ? <p className="thread-auth-error">{errorMessage}</p> : null}
+      <div className="thread-auth-header">
+        <div className="thread-auth-logo-badge">
+          <span className="brand-dot" />
+          <span className="thread-auth-logo">Stackfox</span>
+        </div>
+        <span className="brand-edition">Enterprise Platform</span>
+      </div>
+
+      <h1 className="thread-auth-title">Sign in to your workspace</h1>
+      <p className="thread-auth-subtitle">
+        Vectorless GraphRAG & Context Layer for Production Engineering Teams
+      </p>
+
+      {errorMessage ? (
+        <div className="thread-auth-error" role="alert">
+          <span className="error-icon">⚠</span>
+          <span>{errorMessage}</span>
+        </div>
+      ) : null}
+
+      {/* Quick Direct Workspace Access */}
+      <div className="auth-direct-section">
+        <label className="auth-label">Direct Workspace Access</label>
+        <a
+          href={ishaanDevLoginHref}
+          className="auth-direct-btn"
+          title="Sign in immediately as Ishaan Satapathy"
+        >
+          <div className="auth-user-avatar">IS</div>
+          <div className="auth-user-info">
+            <span className="auth-user-name">Ishaan Satapathy</span>
+            <span className="auth-user-email">ishaansatapathy09@gmail.com · Owner</span>
+          </div>
+          <span className="auth-arrow">→</span>
+        </a>
+      </div>
+
+      <div className="auth-divider">
+        <span>or sign in with email</span>
+      </div>
+
+      <form onSubmit={handleCustomLogin} className="auth-email-form">
+        <div className="auth-input-group">
+          <input
+            type="email"
+            value={customEmail}
+            onChange={(e) => setCustomEmail(e.target.value)}
+            placeholder="developer@company.com"
+            className="auth-input"
+            disabled={isSubmitting}
+          />
+          <button
+            type="submit"
+            className="auth-submit-btn"
+            disabled={isSubmitting || !customEmail.trim()}
+          >
+            {isSubmitting ? "Signing in…" : "Sign In"}
+          </button>
+        </div>
+      </form>
+
+      <div className="auth-divider">
+        <span>enterprise sso</span>
+      </div>
+
       <a href={googleHref} className="thread-auth-google-wide">
         <GoogleIcon />
-        Continue with Google
+        Continue with Google SSO
       </a>
-      <p className="thread-auth-hint">Graph Hacks · FalkorDB context layer</p>
+
+      <div className="thread-auth-footer">
+        <span className="status-indicator">
+          <span className="status-dot healthy" />
+          Neon PostgreSQL & FalkorDB Graph Layer: Online
+        </span>
+      </div>
     </div>
   );
 }

@@ -9,6 +9,7 @@ import {
   workspaceIntegrations,
   workspaceTools,
   workspaceMembers,
+  getWorkspaceAiUsage,
 } from "@stackfox/services";
 import { z } from "zod";
 
@@ -430,6 +431,19 @@ export const workspaceRouter = router({
       .query(async ({ ctx, input }) => {
         try {
           return await workspaceTools.listAudit(input.workspaceId, ctx.user.id);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+  }),
+
+  usage: router({
+    current: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        try {
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await getWorkspaceAiUsage(input.workspaceId);
         } catch (error) {
           mapServiceError(error);
         }

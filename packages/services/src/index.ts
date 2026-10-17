@@ -24,6 +24,7 @@ export * as graphEngine from "./graph/engine";
 export { graphRagAnswer } from "./graph/rag";
 export * as agentMemory from "./graph/memory";
 export * as graphChunks from "./graph/chunks";
+export { isGraphEngineActive, checkFalkorDbConnection } from "./graph/falkordb";
 export { triggerSync, syncDb } from "./sync";
 export { githubPushPayloadSchema } from "./github/push-schema";
 export { verifyGithubSignature } from "./github/verify";
@@ -54,4 +55,5 @@ export {
   withDbRetry,
   classifyDbError,
   withDbErrorHandling,
+  getWorkspaceAiUsage,
 } from "./db";

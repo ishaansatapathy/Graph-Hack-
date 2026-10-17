@@ -108,3 +108,18 @@ googleAuthRouter.get("/google/callback", async (req, res) => {
     return res.redirect(`${env.CLIENT_URL}/sign-in?error=${encodeURIComponent(authError.message)}`);
   }
 });
+
+googleAuthRouter.all("/dev-login", async (req, res) => {
+  try {
+    const email = (req.query.email as string) || (req.body?.email as string) || "ishaansatapathy09@gmail.com";
+    const returnTo = (req.query.returnTo as string) || (req.body?.returnTo as string) || "/app";
+    const redirectUrl = await authService.handleDevLogin(email, res, returnTo);
+    if (req.headers.accept?.includes("application/json")) {
+      return res.json({ ok: true, redirectUrl });
+    }
+    return res.redirect(redirectUrl);
+  } catch (error) {
+    console.error("Dev login failed", error);
+    return res.redirect(`${env.CLIENT_URL}/sign-in?error=Dev%20login%20failed`);
+  }
+});

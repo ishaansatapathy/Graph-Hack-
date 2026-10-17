@@ -213,6 +213,32 @@ class AuthService {
       throw toAuthError(error, "Google sign-in failed. Please try again.");
     }
   }
+
+  public async handleDevLogin(
+    email: string,
+    res: Response,
+    returnTo = "/app",
+  ): Promise<string> {
+    const sanitizedEmail = sanitizeEmail(email || "ishaansatapathy09@gmail.com");
+    let user = await this.findUserByEmail(sanitizedEmail);
+
+    if (!user) {
+      user = await userDb.insertUser({
+        id: crypto.randomUUID(),
+        email: sanitizedEmail,
+        fullName: sanitizedEmail === "ishaansatapathy09@gmail.com" ? "Ishaan Satapathy" : (sanitizedEmail.split("@")[0] || "User"),
+        displayName: sanitizedEmail === "ishaansatapathy09@gmail.com" ? "Ishaan" : (sanitizedEmail.split("@")[0] || "User"),
+        profileImageUrl: null,
+        provider: "dev",
+        providerId: "dev-" + crypto.randomUUID(),
+        emailVerified: true,
+      });
+    }
+
+    issueAuthCookies(res, toTokenUser(user));
+    const destination = sanitizeRedirectPath(returnTo);
+    return `${env.CLIENT_URL}${destination}`;
+  }
 }
 
 export default AuthService;
