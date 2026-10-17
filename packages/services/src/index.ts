@@ -2,6 +2,7 @@ export { env, getGoogleOAuthConfig, isGoogleOAuthConfigured } from "./env";
 export { default as AuthService } from "./auth";
 export { default as UserService } from "./user";
 export { AuthError, toAuthError } from "./auth/errors";
+export { UserError } from "./errors";
 export { authUserSchema, messageOutputSchema } from "./auth/model";
 export { getAuthenticationMethodOutputSchema } from "./user/model";
 export { sanitizeRedirectPath } from "./auth/safe-redirect";
@@ -42,5 +43,6 @@ export {
 export { checkDeviceQuota, getDeviceUsage } from "./ai/fingerprint";
 
 // ── Conflict ──────────────────────────────────────────────────────────────
+export { notifyNewConflicts } from "./conflict/notify";
 export { detectConflicts, markConflictResolved, type ConflictRecord } from "./conflict/detect";
 export { resolveConflict, type ResolveResult } from "./conflict/resolve";

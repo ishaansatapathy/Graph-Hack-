@@ -1,5 +1,6 @@
 import type { GithubPushPayload } from "../github/push-schema";
 import { extractJiraKeys, summarizePush } from "../github/push-schema";
+import { notifyNewConflicts } from "../conflict/notify";
 import { upsertChunks } from "../graph/chunks";
 import { graphWrite } from "../graph/falkordb";
 import * as workspaceDb from "./db";
@@ -166,6 +167,9 @@ export async function handleGithubPush(workspaceId: string, payload: GithubPushP
       `Stackfox: commit ${summary.sha} on ${summary.branch} — ${summary.message}`,
     );
   }
+
+  // Alert admins about any newly-detected conflicts (deduped, non-blocking)
+  void notifyNewConflicts(workspaceId, summary.author);
 
   const gh = await readGithubConfig(workspaceId);
   return {

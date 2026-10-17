@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { OpenApiMeta } from "trpc-to-openapi";
-import { AuthError } from "@stackfox/services";
+import { AuthError, UserError } from "@stackfox/services";
 import { ZodError } from "zod";
 
 import { createContext } from "./context";
@@ -87,5 +87,6 @@ export function mapAuthError(error: unknown): never {
 
 export function mapServiceError(error: unknown): never {
   if (error instanceof TRPCError) throw error;
+  if (error instanceof UserError) throw new TRPCError({ code: error.code, message: error.message });
   sanitizeTrpcError(error);
 }

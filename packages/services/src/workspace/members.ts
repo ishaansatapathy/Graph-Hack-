@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, lt, or } from "drizzle-orm";
 
 import { db, schema } from "../db/client";
 import { findUserByEmail, findUserById, getMemberRole, insertWorkspaceMember } from "../db/index";
 import { sendInviteEmail, sendMemberJoinedEmail } from "../email";
+import { UserError } from "../errors";
 import { childLogger } from "../logger";
 
 const log = childLogger("members");
@@ -15,13 +16,13 @@ export type MemberRole = "owner" | "admin" | "member";
 
 async function roleOf(workspaceId: string, userId: string): Promise<MemberRole> {
   const role = await getMemberRole(workspaceId, userId);
-  if (!role) throw new Error("Workspace not found or access denied");
+  if (!role) throw new UserError("Workspace not found or access denied");
   return role === "owner" || role === "admin" ? role : "member";
 }
 
 async function assertAdmin(workspaceId: string, userId: string): Promise<MemberRole> {
   const role = await roleOf(workspaceId, userId);
-  if (role === "member") throw new Error("Only workspace owners and admins can do this");
+  if (role === "member") throw new UserError("Only workspace owners and admins can do this");
   return role;
 }
 
@@ -73,7 +74,7 @@ export async function inviteMember(
 ) {
   await assertAdmin(workspaceId, actorId);
   const email = emailRaw.trim().toLowerCase();
-  if (!email.includes("@")) throw new Error("Enter a valid email");
+  if (!email.includes("@")) throw new UserError("Enter a valid email");
 
   const actor = await findUserById(actorId);
   const actorName = actor?.display_name || actor?.full_name || "A teammate";
@@ -86,7 +87,7 @@ export async function inviteMember(
   const user = await findUserByEmail(email);
   if (user) {
     const existing = await getMemberRole(workspaceId, user.id);
-    if (existing) throw new Error("Already a member of this workspace");
+    if (existing) throw new UserError("Already a member of this workspace");
     await insertWorkspaceMember({ workspace_id: workspaceId, user_id: user.id, role });
 
     // Notify existing workspace members that someone new joined
@@ -106,6 +107,13 @@ export async function inviteMember(
     return { status: "added" as const, message: `${email} added as ${role}` };
   }
 
+  // Purge stale (expired or already-accepted) invites so re-inviting works
+  await db.delete(schema.workspaceInvites).where(and(
+    eq(schema.workspaceInvites.workspaceId, workspaceId),
+    eq(schema.workspaceInvites.email, email),
+    or(isNotNull(schema.workspaceInvites.acceptedAt), lt(schema.workspaceInvites.expiresAt, new Date())),
+  ));
+
   // Create pending invite
   const existingInvite = await db.select()
     .from(schema.workspaceInvites)
@@ -116,7 +124,7 @@ export async function inviteMember(
     ))
     .limit(1);
 
-  if (existingInvite.length > 0) throw new Error("An invite is already pending for this email");
+  if (existingInvite.length > 0) throw new UserError("An invite is already pending for this email");
 
   const inviteToken = crypto.randomBytes(32).toString("hex");
 
@@ -149,6 +157,74 @@ export async function cancelInvite(workspaceId: string, actorId: string, inviteI
   return { ok: true };
 }
 
+// ── Invite by token (email link flow) ─────────────────────────────────────────
+
+export type InviteDetails = {
+  workspaceName: string;
+  inviterName: string;
+  role: MemberRole;
+  email: string;
+  expiresAt: string;
+};
+
+async function findOpenInvite(token: string) {
+  const [inv] = await db.select()
+    .from(schema.workspaceInvites)
+    .where(and(
+      eq(schema.workspaceInvites.token, token),
+      isNull(schema.workspaceInvites.acceptedAt),
+      gt(schema.workspaceInvites.expiresAt, new Date()),
+    ))
+    .limit(1);
+  return inv ?? null;
+}
+
+/** Public lookup — the 256-bit token is the credential. */
+export async function getInviteByToken(token: string): Promise<InviteDetails> {
+  const inv = await findOpenInvite(token);
+  if (!inv) throw new UserError("This invite is invalid, expired, or already used");
+
+  const [ws] = await db.select({ name: schema.workspaces.name })
+    .from(schema.workspaces)
+    .where(eq(schema.workspaces.id, inv.workspaceId))
+    .limit(1);
+  const inviter = await findUserById(inv.invitedByUserId);
+
+  return {
+    workspaceName: ws?.name ?? "a workspace",
+    inviterName: inviter?.display_name || inviter?.full_name || "A teammate",
+    role: inv.role === "admin" ? "admin" : "member",
+    email: inv.email,
+    expiresAt: inv.expiresAt.toISOString(),
+  };
+}
+
+/** Accept an invite as the signed-in user. The user's email must match the invite. */
+export async function acceptInviteByToken(token: string, userId: string, userEmail: string) {
+  const inv = await findOpenInvite(token);
+  if (!inv) throw new UserError("This invite is invalid, expired, or already used");
+  if (inv.email.toLowerCase() !== userEmail.trim().toLowerCase()) {
+    throw new UserError(`This invite was sent to ${inv.email}. Sign in with that account to accept it.`);
+  }
+
+  // Mark accepted first (conditional) so concurrent clicks can't double-accept
+  const claimed = await db.update(schema.workspaceInvites)
+    .set({ acceptedAt: new Date() })
+    .where(and(eq(schema.workspaceInvites.id, inv.id), isNull(schema.workspaceInvites.acceptedAt)))
+    .returning({ id: schema.workspaceInvites.id });
+  if (claimed.length === 0) throw new UserError("This invite is invalid, expired, or already used");
+
+  const already = await getMemberRole(inv.workspaceId, userId);
+  if (!already) {
+    await insertWorkspaceMember({ workspace_id: inv.workspaceId, user_id: userId, role: inv.role });
+  }
+
+  await setActiveWorkspace(userId, inv.workspaceId);
+
+  log.info({ workspaceId: inv.workspaceId, userId }, "Invite accepted");
+  return { workspaceId: inv.workspaceId };
+}
+
 // ── Accept pending invites on sign-in ─────────────────────────────────────────
 
 export async function acceptPendingInvites(userId: string, email: string): Promise<void> {
@@ -157,6 +233,7 @@ export async function acceptPendingInvites(userId: string, email: string): Promi
     .where(and(
       eq(schema.workspaceInvites.email, email.toLowerCase()),
       isNull(schema.workspaceInvites.acceptedAt),
+      gt(schema.workspaceInvites.expiresAt, new Date()),
     ));
 
   for (const inv of invites) {
@@ -181,8 +258,8 @@ export async function setMemberRole(
 ) {
   const actorRole = await assertAdmin(workspaceId, actorId);
   const targetRole = await roleOf(workspaceId, targetUserId);
-  if (targetRole === "owner") throw new Error("The owner's role cannot be changed");
-  if (actorRole !== "owner") throw new Error("Only the owner can change roles");
+  if (targetRole === "owner") throw new UserError("The owner's role cannot be changed");
+  if (actorRole !== "owner") throw new UserError("Only the owner can change roles");
 
   await db.update(schema.workspaceMembers)
     .set({ role })
@@ -193,7 +270,7 @@ export async function setMemberRole(
 
 export async function removeMember(workspaceId: string, actorId: string, targetUserId: string) {
   const targetRole = await roleOf(workspaceId, targetUserId);
-  if (targetRole === "owner") throw new Error("The owner cannot be removed");
+  if (targetRole === "owner") throw new UserError("The owner cannot be removed");
   if (targetUserId !== actorId) await assertAdmin(workspaceId, actorId);
 
   await db.delete(schema.workspaceMembers)
@@ -204,11 +281,17 @@ export async function removeMember(workspaceId: string, actorId: string, targetU
 
 // ── Active workspace ──────────────────────────────────────────────────────────
 
-// Stored in DB as a simple lookup (replaces SQLite user_active_workspace table)
-// We use a JSON column in the users table for this lightweight preference
-// For now: resolve from workspace_members — first workspace the user belongs to
+// Persisted in users.active_workspace_id. Always validated against current
+// membership so a removed member can never resolve to a workspace they left.
 
 export async function resolveActiveWorkspaceId(userId: string): Promise<string | null> {
+  const [pref] = await db.select({ id: schema.users.activeWorkspaceId })
+    .from(schema.users)
+    .where(eq(schema.users.id, userId))
+    .limit(1);
+
+  if (pref?.id && (await getMemberRole(pref.id, userId))) return pref.id;
+
   const [row] = await db.select({ workspaceId: schema.workspaceMembers.workspaceId })
     .from(schema.workspaceMembers)
     .where(eq(schema.workspaceMembers.userId, userId))
@@ -220,7 +303,9 @@ export async function resolveActiveWorkspaceId(userId: string): Promise<string |
 export async function setActiveWorkspace(userId: string, workspaceId: string): Promise<void> {
   // Validate access
   try { await roleOf(workspaceId, userId); } catch { return; }
-  // Active workspace is resolved from membership order — no extra table needed
+  await db.update(schema.users)
+    .set({ activeWorkspaceId: workspaceId })
+    .where(eq(schema.users.id, userId));
   log.debug({ userId, workspaceId }, "Active workspace set");
 }
 

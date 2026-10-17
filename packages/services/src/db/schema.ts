@@ -40,6 +40,7 @@ export const users = pgTable("users", {
   tokenVersion: text("token_version").notNull().default("0"),
   provider: text("provider").notNull().default("google"),
   providerId: text("provider_id"),
+  activeWorkspaceId: text("active_workspace_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
@@ -205,4 +206,14 @@ export const workspaceInvites = pgTable("workspace_invites", {
 }, (t) => [
   unique("uq_invite_workspace_email").on(t.workspaceId, t.email),
   index("idx_invite_token").on(t.token),
+]);
+
+// ── Conflict notifications (dedupe so each conflict emails once) ──────────────
+
+export const conflictNotifications = pgTable("conflict_notifications", {
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  conflictKey: text("conflict_key").notNull(),   // e.g. "path::shaA::shaB"
+  notifiedAt: timestamp("notified_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.workspaceId, t.conflictKey] }),
 ]);

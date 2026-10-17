@@ -13,7 +13,7 @@ import {
 import { z } from "zod";
 
 import { zodUndefinedModel } from "../../schema";
-import { mapServiceError, protectedProcedure, router } from "../../trpc";
+import { mapServiceError, protectedProcedure, publicProcedure, router } from "../../trpc";
 import { generatePath } from "../../utils/path-generator";
 
 const TAGS = ["Workspace"];
@@ -45,17 +45,17 @@ export const workspaceRouter = router({
     .meta({ openapi: { method: "GET", path: getPath("/current"), tags: TAGS, protect: true } })
     .input(zodUndefinedModel)
     .output(workspaceSchema)
-    .query(({ ctx }) => {
+    .query(async ({ ctx }) => {
       try {
-        return getOrCreateWorkspaceForUser(ctx.user.id, ctx.user.fullName, ctx.user.email);
+        return await getOrCreateWorkspaceForUser(ctx.user.id, ctx.user.fullName, ctx.user.email);
       } catch (error) {
         mapServiceError(error);
       }
     }),
 
-  list: protectedProcedure.query(({ ctx }) => {
+  list: protectedProcedure.query(async ({ ctx }) => {
     try {
-      return workspaceMembers.listWorkspacesForUser(ctx.user.id);
+      return await workspaceMembers.listWorkspacesForUser(ctx.user.id);
     } catch (error) {
       mapServiceError(error);
     }
@@ -63,9 +63,9 @@ export const workspaceRouter = router({
 
   setActive: protectedProcedure
     .input(z.object({ workspaceId: z.string().uuid() }))
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       try {
-        workspaceMembers.setActiveWorkspace(ctx.user.id, input.workspaceId);
+        await workspaceMembers.setActiveWorkspace(ctx.user.id, input.workspaceId);
         return { ok: true };
       } catch (error) {
         mapServiceError(error);
@@ -73,11 +73,30 @@ export const workspaceRouter = router({
     }),
 
   members: router({
+    inviteDetails: publicProcedure
+      .input(z.object({ token: z.string().min(32).max(128) }))
+      .query(async ({ input }) => {
+        try {
+          return await workspaceMembers.getInviteByToken(input.token);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    acceptInvite: protectedProcedure
+      .input(z.object({ token: z.string().min(32).max(128) }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await workspaceMembers.acceptInviteByToken(input.token, ctx.user.id, ctx.user.email);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
     list: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid() }))
-      .query(({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         try {
-          return workspaceMembers.listMembers(input.workspaceId, ctx.user.id);
+          return await workspaceMembers.listMembers(input.workspaceId, ctx.user.id);
         } catch (error) {
           mapServiceError(error);
         }
@@ -91,9 +110,9 @@ export const workspaceRouter = router({
           role: z.enum(["admin", "member"]).default("member"),
         }),
       )
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          return workspaceMembers.inviteMember(input.workspaceId, ctx.user.id, input.email, input.role);
+          return await workspaceMembers.inviteMember(input.workspaceId, ctx.user.id, input.email, input.role);
         } catch (error) {
           mapServiceError(error);
         }
@@ -101,9 +120,9 @@ export const workspaceRouter = router({
 
     cancelInvite: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid(), inviteId: z.string().uuid() }))
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          return workspaceMembers.cancelInvite(input.workspaceId, ctx.user.id, input.inviteId);
+          return await workspaceMembers.cancelInvite(input.workspaceId, ctx.user.id, input.inviteId);
         } catch (error) {
           mapServiceError(error);
         }
@@ -117,9 +136,9 @@ export const workspaceRouter = router({
           role: z.enum(["admin", "member"]),
         }),
       )
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          return workspaceMembers.setMemberRole(input.workspaceId, ctx.user.id, input.userId, input.role);
+          return await workspaceMembers.setMemberRole(input.workspaceId, ctx.user.id, input.userId, input.role);
         } catch (error) {
           mapServiceError(error);
         }
@@ -127,9 +146,9 @@ export const workspaceRouter = router({
 
     remove: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid(), userId: z.string().uuid() }))
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          return workspaceMembers.removeMember(input.workspaceId, ctx.user.id, input.userId);
+          return await workspaceMembers.removeMember(input.workspaceId, ctx.user.id, input.userId);
         } catch (error) {
           mapServiceError(error);
         }
@@ -140,10 +159,10 @@ export const workspaceRouter = router({
     list: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid() }))
       .output(z.array(integrationSummarySchema))
-      .query(({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
-          return workspaceIntegrations.listIntegrationSummaries(input.workspaceId);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await workspaceIntegrations.listIntegrationSummaries(input.workspaceId);
         } catch (error) {
           mapServiceError(error);
         }
@@ -152,10 +171,10 @@ export const workspaceRouter = router({
     githubOnboarding: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid() }))
       .output(z.object({ webhookUrl: z.string() }))
-      .query(({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
-          return getGithubOnboarding(input.workspaceId);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await getGithubOnboarding(input.workspaceId);
         } catch (error) {
           mapServiceError(error);
         }
@@ -179,7 +198,7 @@ export const workspaceRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
           const result = await workspaceIntegrations.upsertGithub(input.workspaceId, input);
           return {
             message: result.webhookRegistration?.message ?? result.message,
@@ -200,10 +219,10 @@ export const workspaceRouter = router({
         }),
       )
       .output(messageOutputSchema)
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
-          workspaceIntegrations.upsertJira(input.workspaceId, input);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await workspaceIntegrations.upsertJira(input.workspaceId, input);
           return { message: "Jira connected" };
         } catch (error) {
           mapServiceError(error);
@@ -220,10 +239,10 @@ export const workspaceRouter = router({
         }),
       )
       .output(messageOutputSchema)
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
-          workspaceIntegrations.upsertSlack(input.workspaceId, input);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await workspaceIntegrations.upsertSlack(input.workspaceId, input);
           return { message: "Slack connected" };
         } catch (error) {
           mapServiceError(error);
@@ -233,10 +252,10 @@ export const workspaceRouter = router({
     remove: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid(), provider: providerSchema }))
       .output(messageOutputSchema)
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
-          workspaceIntegrations.removeIntegration(input.workspaceId, input.provider);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await workspaceIntegrations.removeIntegration(input.workspaceId, input.provider);
           return { message: "Integration removed" };
         } catch (error) {
           mapServiceError(error);
@@ -246,10 +265,10 @@ export const workspaceRouter = router({
     testGithub: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid() }))
       .output(testResultSchema)
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
-          return workspaceIntegrations.testGithub(input.workspaceId);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await workspaceIntegrations.testGithub(input.workspaceId);
         } catch (error) {
           mapServiceError(error);
         }
@@ -258,10 +277,10 @@ export const workspaceRouter = router({
     testJira: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid() }))
       .output(testResultSchema)
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
-          return workspaceIntegrations.testJira(input.workspaceId);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await workspaceIntegrations.testJira(input.workspaceId);
         } catch (error) {
           mapServiceError(error);
         }
@@ -270,10 +289,10 @@ export const workspaceRouter = router({
     testSlack: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid() }))
       .output(testResultSchema)
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
-          return workspaceIntegrations.testSlack(input.workspaceId);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await workspaceIntegrations.testSlack(input.workspaceId);
         } catch (error) {
           mapServiceError(error);
         }
@@ -293,9 +312,9 @@ export const workspaceRouter = router({
           }),
         ),
       )
-      .query(({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         try {
-          return listApiKeys(input.workspaceId, ctx.user.id);
+          return await listApiKeys(input.workspaceId, ctx.user.id);
         } catch (error) {
           mapServiceError(error);
         }
@@ -312,9 +331,9 @@ export const workspaceRouter = router({
           createdAt: z.string(),
         }),
       )
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          return createApiKey(input.workspaceId, ctx.user.id, input.name);
+          return await createApiKey(input.workspaceId, ctx.user.id, input.name);
         } catch (error) {
           mapServiceError(error);
         }
@@ -323,9 +342,9 @@ export const workspaceRouter = router({
     revokeApiKey: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid(), keyId: z.string().uuid() }))
       .output(messageOutputSchema)
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          revokeApiKey(input.workspaceId, ctx.user.id, input.keyId);
+          await revokeApiKey(input.workspaceId, ctx.user.id, input.keyId);
           return { message: "API key revoked" };
         } catch (error) {
           mapServiceError(error);
@@ -336,10 +355,10 @@ export const workspaceRouter = router({
   tools: router({
     list: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid() }))
-      .query(({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         try {
           return {
-            tools: workspaceTools.listTools(input.workspaceId, ctx.user.id),
+            tools: await workspaceTools.listTools(input.workspaceId, ctx.user.id),
             catalog: workspaceTools.TOOL_CATALOG,
           };
         } catch (error) {
@@ -356,9 +375,9 @@ export const workspaceRouter = router({
           description: z.string().max(300).optional(),
         }),
       )
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          return workspaceTools.createTool(input.workspaceId, ctx.user.id, input);
+          return await workspaceTools.createTool(input.workspaceId, ctx.user.id, input);
         } catch (error) {
           mapServiceError(error);
         }
@@ -372,9 +391,9 @@ export const workspaceRouter = router({
           visibility: z.enum(["private", "workspace"]),
         }),
       )
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          return workspaceTools.setToolVisibility(input.workspaceId, ctx.user.id, input.toolId, input.visibility);
+          return await workspaceTools.setToolVisibility(input.workspaceId, ctx.user.id, input.toolId, input.visibility);
         } catch (error) {
           mapServiceError(error);
         }
@@ -382,9 +401,9 @@ export const workspaceRouter = router({
 
     revoke: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid(), toolId: z.string().uuid() }))
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         try {
-          return workspaceTools.revokeTool(input.workspaceId, ctx.user.id, input.toolId);
+          return await workspaceTools.revokeTool(input.workspaceId, ctx.user.id, input.toolId);
         } catch (error) {
           mapServiceError(error);
         }
@@ -408,9 +427,9 @@ export const workspaceRouter = router({
 
     audit: protectedProcedure
       .input(z.object({ workspaceId: z.string().uuid() }))
-      .query(({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         try {
-          return workspaceTools.listAudit(input.workspaceId, ctx.user.id);
+          return await workspaceTools.listAudit(input.workspaceId, ctx.user.id);
         } catch (error) {
           mapServiceError(error);
         }
