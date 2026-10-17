@@ -1,76 +1,358 @@
-import fs from "node:fs";
-import path from "node:path";
+/**
+ * Production data access layer — Drizzle ORM on Neon (PostgreSQL).
+ *
+ * Same function signatures as the old SQLite db.ts so all callers
+ * continue to work without changes. Internally uses async Drizzle queries.
+ */
 
-import Database from "better-sqlite3";
+import crypto from "node:crypto";
 
-import { env } from "../env";
+import { and, desc, eq, sql } from "drizzle-orm";
 
+import { childLogger } from "../logger";
+import { db, schema } from "./client";
+
+const log = childLogger("db");
+
+// Re-export types so callers don't need to change their imports
+export type IntegrationProvider = "github" | "jira" | "slack";
+
+// User type — matches old SQLite user table shape for auth compatibility
 export type DbUser = {
   id: string;
-  full_name: string;
-  display_name: string | null;
   email: string;
-  email_verified: number;
-  auth_provider: string;
-  provider_id: string | null;
+  full_name: string;
+  display_name: string;
   profile_image_url: string | null;
+  email_verified: number | boolean;
+  role: string;
   token_version: string;
+  provider: string;
+  provider_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DbWorkspace = {
+  id: string;
+  name: string;
+  slug: string;
+  owner_user_id: string;
+  created_at: string;
+};
+
+export type DbWorkspaceMember = {
+  workspace_id: string;
+  user_id: string;
   role: string;
 };
 
-const defaultPath = path.join(process.cwd(), "data", "graph-hack.sqlite");
-const dbPath = env.DATABASE_PATH?.trim() || defaultPath;
+export type DbIntegration = {
+  workspace_id: string;
+  provider: IntegrationProvider;
+  config_encrypted: string;
+  updated_at: string;
+};
 
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+export type DbApiKey = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  key_prefix: string;
+  key_hash: string;
+  created_at: string;
+};
 
-const db = new Database(dbPath);
+// ── Workspaces ────────────────────────────────────────────────────────────────
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    full_name TEXT NOT NULL,
-    display_name TEXT,
-    email TEXT NOT NULL UNIQUE,
-    email_verified INTEGER NOT NULL DEFAULT 0,
-    auth_provider TEXT NOT NULL DEFAULT 'google',
-    provider_id TEXT,
-    profile_image_url TEXT,
-    token_version TEXT NOT NULL DEFAULT '0',
-    role TEXT NOT NULL DEFAULT 'user'
-  );
-`);
-
-export function findUserByEmail(email: string): DbUser | null {
-  const row = db.prepare("SELECT * FROM users WHERE email = ? LIMIT 1").get(email) as DbUser | undefined;
-  return row ?? null;
+export async function findWorkspaceById(id: string): Promise<DbWorkspace | null> {
+  const [row] = await db.select().from(schema.workspaces).where(eq(schema.workspaces.id, id)).limit(1);
+  if (!row) return null;
+  return { id: row.id, name: row.name, slug: row.slug, owner_user_id: row.ownerUserId, created_at: row.createdAt.toISOString() };
 }
 
-export function findUserById(userId: string): DbUser | null {
-  const row = db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").get(userId) as DbUser | undefined;
-  return row ?? null;
+export async function findWorkspaceBySlug(slug: string): Promise<DbWorkspace | null> {
+  const [row] = await db.select().from(schema.workspaces).where(eq(schema.workspaces.slug, slug)).limit(1);
+  if (!row) return null;
+  return { id: row.id, name: row.name, slug: row.slug, owner_user_id: row.ownerUserId, created_at: row.createdAt.toISOString() };
 }
 
-export function insertUser(user: DbUser) {
-  db.prepare(
-    `INSERT INTO users (
-      id, full_name, display_name, email, email_verified, auth_provider,
-      provider_id, profile_image_url, token_version, role
-    ) VALUES (
-      @id, @full_name, @display_name, @email, @email_verified, @auth_provider,
-      @provider_id, @profile_image_url, @token_version, @role
-    )`,
-  ).run(user);
+export async function findWorkspaceForUser(userId: string): Promise<DbWorkspace | null> {
+  const [row] = await db
+    .select({ workspace: schema.workspaces })
+    .from(schema.workspaces)
+    .innerJoin(schema.workspaceMembers, eq(schema.workspaceMembers.workspaceId, schema.workspaces.id))
+    .where(eq(schema.workspaceMembers.userId, userId))
+    .orderBy(schema.workspaces.createdAt)
+    .limit(1);
+  if (!row) return null;
+  return {
+    id: row.workspace.id,
+    name: row.workspace.name,
+    slug: row.workspace.slug,
+    owner_user_id: row.workspace.ownerUserId,
+    created_at: row.workspace.createdAt.toISOString(),
+  };
 }
 
-export function updateUserProvider(userId: string, providerId: string, profileImageUrl: string | null, emailVerified: boolean) {
-  db.prepare(
-    `UPDATE users SET provider_id = ?, profile_image_url = COALESCE(profile_image_url, ?), email_verified = MAX(email_verified, ?) WHERE id = ?`,
-  ).run(providerId, profileImageUrl, emailVerified ? 1 : 0, userId);
+export async function insertWorkspace(workspace: DbWorkspace): Promise<void> {
+  await db.insert(schema.workspaces).values({
+    id: workspace.id,
+    name: workspace.name,
+    slug: workspace.slug,
+    ownerUserId: workspace.owner_user_id,
+  }).onConflictDoNothing();
 }
 
-export function bumpTokenVersion(userId: string) {
-  const user = findUserById(userId);
-  const current = Number.parseInt(user?.token_version ?? "0", 10);
-  const next = String(Number.isFinite(current) ? current + 1 : 1);
-  db.prepare("UPDATE users SET token_version = ? WHERE id = ?").run(next, userId);
+export async function insertWorkspaceMember(member: DbWorkspaceMember): Promise<void> {
+  await db.insert(schema.workspaceMembers).values({
+    workspaceId: member.workspace_id,
+    userId: member.user_id,
+    role: member.role as "owner" | "admin" | "member",
+  }).onConflictDoNothing();
+}
+
+export async function getMemberRole(workspaceId: string, userId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ role: schema.workspaceMembers.role })
+    .from(schema.workspaceMembers)
+    .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, userId)))
+    .limit(1);
+  return row?.role ?? null;
+}
+
+// ── Integrations ──────────────────────────────────────────────────────────────
+
+export async function listIntegrations(workspaceId: string): Promise<DbIntegration[]> {
+  const rows = await db.select().from(schema.workspaceIntegrations)
+    .where(eq(schema.workspaceIntegrations.workspaceId, workspaceId));
+  return rows.map((r) => ({
+    workspace_id: r.workspaceId,
+    provider: r.provider as IntegrationProvider,
+    config_encrypted: r.configEncrypted,
+    updated_at: r.updatedAt.toISOString(),
+  }));
+}
+
+export async function getIntegration(workspaceId: string, provider: IntegrationProvider): Promise<DbIntegration | null> {
+  const [row] = await db.select()
+    .from(schema.workspaceIntegrations)
+    .where(and(
+      eq(schema.workspaceIntegrations.workspaceId, workspaceId),
+      eq(schema.workspaceIntegrations.provider, provider),
+    ))
+    .limit(1);
+  if (!row) return null;
+  return {
+    workspace_id: row.workspaceId,
+    provider: row.provider as IntegrationProvider,
+    config_encrypted: row.configEncrypted,
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+export async function upsertIntegration(workspaceId: string, provider: IntegrationProvider, configEncrypted: string): Promise<void> {
+  await db.insert(schema.workspaceIntegrations)
+    .values({ workspaceId, provider, configEncrypted })
+    .onConflictDoUpdate({
+      target: [schema.workspaceIntegrations.workspaceId, schema.workspaceIntegrations.provider],
+      set: { configEncrypted, updatedAt: new Date() },
+    });
+}
+
+export async function deleteIntegration(workspaceId: string, provider: IntegrationProvider): Promise<void> {
+  await db.delete(schema.workspaceIntegrations)
+    .where(and(
+      eq(schema.workspaceIntegrations.workspaceId, workspaceId),
+      eq(schema.workspaceIntegrations.provider, provider),
+    ));
+}
+
+// ── API Keys ──────────────────────────────────────────────────────────────────
+
+export async function listApiKeys(workspaceId: string): Promise<DbApiKey[]> {
+  const rows = await db.select().from(schema.apiKeys)
+    .where(eq(schema.apiKeys.workspaceId, workspaceId))
+    .orderBy(desc(schema.apiKeys.createdAt));
+  return rows.map((r) => ({
+    id: r.id,
+    workspace_id: r.workspaceId,
+    name: r.name,
+    key_prefix: r.keyPrefix,
+    key_hash: r.keyHash,
+    created_at: r.createdAt.toISOString(),
+  }));
+}
+
+export async function insertApiKey(row: DbApiKey): Promise<void> {
+  await db.insert(schema.apiKeys).values({
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    keyPrefix: row.key_prefix,
+    keyHash: row.key_hash,
+  });
+}
+
+export async function deleteApiKey(workspaceId: string, keyId: string): Promise<void> {
+  await db.delete(schema.apiKeys)
+    .where(and(eq(schema.apiKeys.workspaceId, workspaceId), eq(schema.apiKeys.id, keyId)));
+}
+
+// ── AI Usage tracking ─────────────────────────────────────────────────────────
+
+export async function trackAiUsage(opts: {
+  workspaceId: string;
+  userId: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  featureTag: string;
+}): Promise<void> {
+  try {
+    await db.insert(schema.aiUsage).values({
+      id: crypto.randomUUID(),
+      workspaceId: opts.workspaceId,
+      userId: opts.userId,
+      model: opts.model,
+      promptTokens: opts.promptTokens,
+      completionTokens: opts.completionTokens,
+      totalTokens: opts.promptTokens + opts.completionTokens,
+      featureTag: opts.featureTag,
+    });
+  } catch (err) {
+    log.warn({ err }, "Failed to track AI usage — non-fatal");
+  }
+}
+
+export async function getWorkspaceAiUsage(workspaceId: string) {
+  const rows = await db
+    .select({
+      model: schema.aiUsage.model,
+      tokens: sql<number>`sum(${schema.aiUsage.totalTokens})`,
+      count: sql<number>`count(*)`,
+    })
+    .from(schema.aiUsage)
+    .where(eq(schema.aiUsage.workspaceId, workspaceId))
+    .groupBy(schema.aiUsage.model);
+
+  const byModel: Record<string, number> = {};
+  let totalTokens = 0;
+  let requestCount = 0;
+  for (const r of rows) {
+    byModel[r.model] = Number(r.tokens);
+    totalTokens += Number(r.tokens);
+    requestCount += Number(r.count);
+  }
+  return { totalTokens, requestCount, byModel };
+}
+
+// ── Device quota (DB-backed, persistent across restarts) ──────────────────────
+
+export async function getDeviceWindowCount(fpHash: string, windowStart: string): Promise<number> {
+  const [row] = await db.select({ requests: schema.deviceQuota.requests })
+    .from(schema.deviceQuota)
+    .where(and(eq(schema.deviceQuota.fpHash, fpHash), eq(schema.deviceQuota.windowStart, windowStart)))
+    .limit(1);
+  return row?.requests ?? 0;
+}
+
+export async function incrementDeviceWindow(fpHash: string, windowStart: string): Promise<void> {
+  await db.insert(schema.deviceQuota)
+    .values({ fpHash, windowStart, requests: 1 })
+    .onConflictDoUpdate({
+      target: [schema.deviceQuota.fpHash, schema.deviceQuota.windowStart],
+      set: { requests: sql`${schema.deviceQuota.requests} + 1` },
+    });
+}
+
+export async function cleanupOldDeviceQuotas(): Promise<void> {
+  const cutoff = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  await db.delete(schema.deviceQuota).where(sql`${schema.deviceQuota.windowStart} < ${cutoff}`);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+export function hashApiKey(raw: string): string {
+  return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+export function slugifyName(name: string): string {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+  return base || "workspace";
+}
+
+// ── User helpers ──────────────────────────────────────────────────────────────
+
+function rowToDbUser(row: typeof schema.users.$inferSelect): DbUser {
+  return {
+    id: row.id,
+    email: row.email,
+    full_name: row.fullName,
+    display_name: row.displayName,
+    profile_image_url: row.profileImageUrl ?? null,
+    email_verified: row.emailVerified,
+    role: row.role,
+    token_version: row.tokenVersion,
+    provider: row.provider,
+    provider_id: row.providerId ?? null,
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+  };
+}
+
+export async function findUserByEmail(email: string): Promise<DbUser | null> {
+  const [row] = await db.select().from(schema.users).where(eq(schema.users.email, email.toLowerCase())).limit(1);
+  return row ? rowToDbUser(row) : null;
+}
+
+export async function findUserById(id: string): Promise<DbUser | null> {
+  const [row] = await db.select().from(schema.users).where(eq(schema.users.id, id)).limit(1);
+  return row ? rowToDbUser(row) : null;
+}
+
+export async function insertUser(user: {
+  id: string;
+  email: string;
+  fullName: string;
+  displayName: string;
+  profileImageUrl?: string | null;
+  provider?: string;
+  providerId?: string | null;
+}): Promise<DbUser> {
+  const [row] = await db.insert(schema.users).values({
+    id: user.id,
+    email: user.email.toLowerCase(),
+    name: user.fullName,
+    fullName: user.fullName,
+    displayName: user.displayName || user.fullName,
+    profileImageUrl: user.profileImageUrl ?? null,
+    provider: user.provider ?? "google",
+    providerId: user.providerId ?? null,
+  }).returning();
+  if (!row) throw new Error("insertUser: no row returned");
+  return rowToDbUser(row);
+}
+
+export async function updateUserProvider(id: string, update: {
+  profileImageUrl?: string | null;
+  providerId?: string;
+  fullName?: string;
+}): Promise<void> {
+  await db.update(schema.users)
+    .set({
+      ...(update.profileImageUrl !== undefined && { profileImageUrl: update.profileImageUrl }),
+      ...(update.providerId && { providerId: update.providerId }),
+      ...(update.fullName && { fullName: update.fullName, name: update.fullName }),
+      updatedAt: new Date(),
+    })
+    .where(eq(schema.users.id, id));
+}
+
+export async function bumpTokenVersion(userId: string): Promise<string> {
+  const newVersion = crypto.randomUUID().slice(0, 8);
+  await db.update(schema.users)
+    .set({ tokenVersion: newVersion, updatedAt: new Date() })
+    .where(eq(schema.users.id, userId));
+  return newVersion;
 }

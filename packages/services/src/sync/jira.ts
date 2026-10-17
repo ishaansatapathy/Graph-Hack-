@@ -34,7 +34,7 @@ type JiraIssue = {
 };
 
 export async function syncJiraToGraph(workspaceId: string): Promise<JiraSyncResult> {
-  const row = workspaceDb.getIntegration(workspaceId, "jira");
+  const row = await workspaceDb.getIntegration(workspaceId, "jira");
   if (!row) throw new Error("Jira is not connected for this workspace");
 
   const config = decryptJson(row.config_encrypted) as {

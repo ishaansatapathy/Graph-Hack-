@@ -32,7 +32,7 @@ export const graphRouter = router({
 
   seedDemo: protectedProcedure.input(ws).mutation(async ({ ctx, input }) => {
     try {
-      const role = assertWorkspaceMember(input.workspaceId, ctx.user.id);
+      const role = await assertWorkspaceMember(input.workspaceId, ctx.user.id);
       if (role === "member") throw new Error("Only owners and admins can reset the graph");
       return await graphEngine.seedDemoGraph(input.workspaceId);
     } catch (error) {
@@ -42,7 +42,7 @@ export const graphRouter = router({
 
   clear: protectedProcedure.input(ws).mutation(async ({ ctx, input }) => {
     try {
-      const role = assertWorkspaceMember(input.workspaceId, ctx.user.id);
+      const role = await assertWorkspaceMember(input.workspaceId, ctx.user.id);
       if (role === "member") throw new Error("Only owners and admins can clear the graph");
       return await graphEngine.clearGraph(input.workspaceId);
     } catch (error) {
@@ -86,7 +86,7 @@ export const graphRouter = router({
         assertWorkspaceMember(input.workspaceId, ctx.user.id);
 
         // 1. Device fingerprint quota check (multi-account abuse prevention)
-        const fpResult = checkDeviceQuota(input.fp ?? null);
+        const fpResult = await checkDeviceQuota(input.fp ?? null);
         if (!fpResult.ok) {
           throw new TRPCError({
             code: "TOO_MANY_REQUESTS",
@@ -98,7 +98,7 @@ export const graphRouter = router({
         }
 
         // 2. Persist user turn to memory
-        agentMemory.appendMessage(input.workspaceId, ctx.user.id, "user", input.question);
+        await agentMemory.appendMessage(input.workspaceId, ctx.user.id, "user", input.question);
 
         // 3. Graph traversal context (keyword-based, no vector store)
         const ragResult = await graphRagAnswer(input.workspaceId, input.question);
@@ -120,7 +120,7 @@ export const graphRouter = router({
           .join("");
 
         // 5. Get conversation memory for this user
-        const thread = agentMemory.getThread(input.workspaceId, ctx.user.id);
+        const thread = await agentMemory.getThread(input.workspaceId, ctx.user.id);
         const memoryMessages: Message[] = thread
           .slice(-8)
           .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
@@ -134,7 +134,7 @@ export const graphRouter = router({
         });
 
         // 7. Persist assistant answer to memory
-        agentMemory.appendMessage(input.workspaceId, ctx.user.id, "assistant", aiResult.content);
+        await agentMemory.appendMessage(input.workspaceId, ctx.user.id, "assistant", aiResult.content);
 
         return {
           answer: aiResult.content,
@@ -152,19 +152,19 @@ export const graphRouter = router({
 
   // ── Agent memory ──────────────────────────────────────────────────────────
   memory: router({
-    list: protectedProcedure.input(ws).query(({ ctx, input }) => {
+    list: protectedProcedure.input(ws).query(async ({ ctx, input }) => {
       try {
         assertWorkspaceMember(input.workspaceId, ctx.user.id);
-        return agentMemory.getThread(input.workspaceId, ctx.user.id);
+        return await agentMemory.getThread(input.workspaceId, ctx.user.id);
       } catch (error) {
         mapServiceError(error);
       }
     }),
 
-    clear: protectedProcedure.input(ws).mutation(({ ctx, input }) => {
+    clear: protectedProcedure.input(ws).mutation(async ({ ctx, input }) => {
       try {
         assertWorkspaceMember(input.workspaceId, ctx.user.id);
-        const deleted = agentMemory.clearThread(input.workspaceId, ctx.user.id);
+        const deleted = await agentMemory.clearThread(input.workspaceId, ctx.user.id);
         return { deleted };
       } catch (error) {
         mapServiceError(error);
@@ -188,10 +188,10 @@ export const graphRouter = router({
 
     runs: protectedProcedure
       .input(ws.extend({ limit: z.number().int().min(1).max(50).default(15) }))
-      .query(({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         try {
           assertWorkspaceMember(input.workspaceId, ctx.user.id);
-          return syncDb.listRuns(input.workspaceId, input.limit);
+          return await syncDb.listRuns(input.workspaceId, input.limit);
         } catch (error) {
           mapServiceError(error);
         }
@@ -230,7 +230,7 @@ export const graphRouter = router({
           assertWorkspaceMember(input.workspaceId, ctx.user.id);
 
           // Device-level rate limit for conflict resolution (it's AI-heavy)
-          const fpResult = checkDeviceQuota(input.fp ?? null);
+          const fpResult = await checkDeviceQuota(input.fp ?? null);
           if (!fpResult.ok) {
             throw new TRPCError({
               code: "TOO_MANY_REQUESTS",
@@ -239,7 +239,7 @@ export const graphRouter = router({
           }
 
           // Get memory thread for context
-          const thread = agentMemory.getThread(input.workspaceId, ctx.user.id);
+          const thread = await agentMemory.getThread(input.workspaceId, ctx.user.id);
           const memoryMessages: Message[] = thread
             .slice(-6)
             .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
@@ -263,7 +263,7 @@ export const graphRouter = router({
           );
 
           // Store resolution in memory
-          agentMemory.appendMessage(
+          await agentMemory.appendMessage(
             input.workspaceId,
             ctx.user.id,
             "assistant",

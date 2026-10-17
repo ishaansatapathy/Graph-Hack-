@@ -1,27 +1,19 @@
 import crypto from "node:crypto";
 
-import * as graphEngine from "../graph/engine";
-import { recordAudit } from "./audit";
-import * as workspaceDb from "./db";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 
-const { sqlite } = workspaceDb;
+import { db, schema } from "../db/client";
+import * as graphEngine from "../graph/engine";
+import { childLogger } from "../logger";
+import { recordAudit } from "./audit";
+import { getMemberRole } from "./db";
+
+const log = childLogger("tools");
 
 export type ToolKind = "query_graph" | "find_callers" | "graph_stats";
 export type ToolVisibility = "private" | "workspace";
 
-type ToolRow = {
-  id: string;
-  workspace_id: string;
-  owner_user_id: string;
-  name: string;
-  kind: ToolKind;
-  description: string;
-  visibility: ToolVisibility;
-  version: number;
-  revoked_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
+type ToolRow = typeof schema.workspaceTools.$inferSelect;
 
 export const TOOL_CATALOG: Record<ToolKind, { label: string; description: string; inputHint: string }> = {
   query_graph: {
@@ -41,36 +33,33 @@ export const TOOL_CATALOG: Record<ToolKind, { label: string; description: string
   },
 };
 
-function audit(workspaceId: string, actorUserId: string, action: string, toolId: string | null, detail = "") {
-  recordAudit(workspaceId, actorUserId, action, toolId, detail);
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-function getTool(workspaceId: string, toolId: string): ToolRow {
-  const row = sqlite
-    .prepare("SELECT * FROM workspace_tools WHERE id = ? AND workspace_id = ?")
-    .get(toolId, workspaceId) as ToolRow | undefined;
+async function getTool(workspaceId: string, toolId: string): Promise<ToolRow> {
+  const [row] = await db.select()
+    .from(schema.workspaceTools)
+    .where(and(eq(schema.workspaceTools.id, toolId), eq(schema.workspaceTools.workspaceId, workspaceId)))
+    .limit(1);
   if (!row) throw new Error("Tool not found");
   return row;
 }
 
-function memberRole(workspaceId: string, userId: string) {
-  const role = workspaceDb.getMemberRole(workspaceId, userId);
+async function memberRole(workspaceId: string, userId: string): Promise<string> {
+  const role = await getMemberRole(workspaceId, userId);
   if (!role) throw new Error("Workspace not found or access denied");
   return role;
 }
 
-/** Owner of the tool, or workspace owner/admin, may manage it. */
-function assertCanManage(tool: ToolRow, userId: string) {
-  const role = memberRole(tool.workspace_id, userId);
-  if (tool.owner_user_id === userId || role === "owner" || role === "admin") return;
+async function assertCanManage(tool: ToolRow, userId: string): Promise<void> {
+  const role = await memberRole(tool.workspaceId, userId);
+  if (tool.ownerUserId === userId || role === "owner" || role === "admin") return;
   throw new Error("Only the tool owner or a workspace admin can change this tool");
 }
 
-/** Private tools are usable only by their owner; shared tools by any workspace member. Checked on every call. */
-function assertCanUse(tool: ToolRow, userId: string) {
-  memberRole(tool.workspace_id, userId);
-  if (tool.revoked_at) throw new Error("This tool was revoked");
-  if (tool.visibility === "private" && tool.owner_user_id !== userId) {
+async function assertCanUse(tool: ToolRow, userId: string): Promise<void> {
+  await memberRole(tool.workspaceId, userId);
+  if (tool.revokedAt) throw new Error("This tool was revoked");
+  if (tool.visibility === "private" && tool.ownerUserId !== userId) {
     throw new Error("This tool is private");
   }
 }
@@ -79,98 +68,109 @@ function toPublic(tool: ToolRow, userId: string) {
   return {
     id: tool.id,
     name: tool.name,
-    kind: tool.kind,
+    kind: tool.kind as ToolKind,
     description: tool.description,
-    visibility: tool.visibility,
+    visibility: tool.visibility as ToolVisibility,
     version: tool.version,
-    revoked: Boolean(tool.revoked_at),
-    ownedByMe: tool.owner_user_id === userId,
-    ownerUserId: tool.owner_user_id,
-    updatedAt: tool.updated_at,
+    revoked: Boolean(tool.revokedAt),
+    ownedByMe: tool.ownerUserId === userId,
+    ownerUserId: tool.ownerUserId,
+    updatedAt: tool.updatedAt.toISOString(),
   };
 }
 
-export function listTools(workspaceId: string, userId: string) {
-  memberRole(workspaceId, userId);
-  const rows = sqlite
-    .prepare(
-      `SELECT * FROM workspace_tools
-       WHERE workspace_id = ? AND (owner_user_id = ? OR (visibility = 'workspace' AND revoked_at IS NULL))
-       ORDER BY updated_at DESC`,
-    )
-    .all(workspaceId, userId) as ToolRow[];
+// ── Exports ───────────────────────────────────────────────────────────────────
+
+export async function listTools(workspaceId: string, userId: string) {
+  await memberRole(workspaceId, userId);
+  const rows = await db.select()
+    .from(schema.workspaceTools)
+    .where(and(
+      eq(schema.workspaceTools.workspaceId, workspaceId),
+      or(
+        eq(schema.workspaceTools.ownerUserId, userId),
+        and(eq(schema.workspaceTools.visibility, "workspace"), isNull(schema.workspaceTools.revokedAt)),
+      ),
+    ))
+    .orderBy(desc(schema.workspaceTools.updatedAt));
   return rows.map((r) => toPublic(r, userId));
 }
 
-export function createTool(
+export async function createTool(
   workspaceId: string,
   userId: string,
   input: { name: string; kind: ToolKind; description?: string },
 ) {
-  memberRole(workspaceId, userId);
+  await memberRole(workspaceId, userId);
   if (!TOOL_CATALOG[input.kind]) throw new Error("Unknown tool kind");
+
   const id = crypto.randomUUID();
-  const now = new Date().toISOString();
-  sqlite
-    .prepare(
-      `INSERT INTO workspace_tools
-        (id, workspace_id, owner_user_id, name, kind, description, visibility, version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'private', 1, ?, ?)`,
-    )
-    .run(id, workspaceId, userId, input.name.trim(), input.kind, input.description?.trim() || TOOL_CATALOG[input.kind].description, now, now);
-  audit(workspaceId, userId, "tool.created", id, input.name);
-  return toPublic(getTool(workspaceId, id), userId);
+  const [row] = await db.insert(schema.workspaceTools).values({
+    id,
+    workspaceId,
+    ownerUserId: userId,
+    name: input.name.trim(),
+    kind: input.kind,
+    description: input.description?.trim() || TOOL_CATALOG[input.kind].description,
+    visibility: "private",
+  }).returning();
+
+  recordAudit(workspaceId, userId, "tool.created", id, input.name);
+  return toPublic(row!, userId);
 }
 
-export function setToolVisibility(workspaceId: string, userId: string, toolId: string, visibility: ToolVisibility) {
-  const tool = getTool(workspaceId, toolId);
-  assertCanManage(tool, userId);
-  if (tool.revoked_at) throw new Error("Revoked tools cannot be shared");
-  sqlite
-    .prepare("UPDATE workspace_tools SET visibility = ?, version = version + 1, updated_at = ? WHERE id = ?")
-    .run(visibility, new Date().toISOString(), toolId);
-  audit(workspaceId, userId, visibility === "workspace" ? "tool.shared" : "tool.unshared", toolId, tool.name);
-  return toPublic(getTool(workspaceId, toolId), userId);
+export async function setToolVisibility(
+  workspaceId: string,
+  userId: string,
+  toolId: string,
+  visibility: ToolVisibility,
+) {
+  const tool = await getTool(workspaceId, toolId);
+  await assertCanManage(tool, userId);
+  if (tool.revokedAt) throw new Error("Revoked tools cannot be shared");
+
+  const [updated] = await db.update(schema.workspaceTools)
+    .set({ visibility, version: tool.version + 1, updatedAt: new Date() })
+    .where(eq(schema.workspaceTools.id, toolId))
+    .returning();
+
+  recordAudit(workspaceId, userId, visibility === "workspace" ? "tool.shared" : "tool.unshared", toolId, tool.name);
+  return toPublic(updated!, userId);
 }
 
-export function revokeTool(workspaceId: string, userId: string, toolId: string) {
-  const tool = getTool(workspaceId, toolId);
-  assertCanManage(tool, userId);
-  sqlite
-    .prepare("UPDATE workspace_tools SET revoked_at = ?, visibility = 'private', updated_at = ? WHERE id = ?")
-    .run(new Date().toISOString(), new Date().toISOString(), toolId);
-  audit(workspaceId, userId, "tool.revoked", toolId, tool.name);
+export async function revokeTool(workspaceId: string, userId: string, toolId: string) {
+  const tool = await getTool(workspaceId, toolId);
+  await assertCanManage(tool, userId);
+
+  await db.update(schema.workspaceTools)
+    .set({ revokedAt: new Date(), visibility: "private", updatedAt: new Date() })
+    .where(eq(schema.workspaceTools.id, toolId));
+
+  recordAudit(workspaceId, userId, "tool.revoked", toolId, tool.name);
   return { ok: true };
 }
 
-export function listAudit(workspaceId: string, userId: string) {
-  memberRole(workspaceId, userId);
-  const rows = sqlite
-    .prepare(
-      `SELECT id, actor_user_id, action, tool_id, detail, created_at FROM audit_events
-       WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 50`,
-    )
-    .all(workspaceId) as {
-    id: string;
-    actor_user_id: string;
-    action: string;
-    tool_id: string | null;
-    detail: string;
-    created_at: string;
-  }[];
+export async function listAudit(workspaceId: string, userId: string) {
+  await memberRole(workspaceId, userId);
+  const rows = await db.select()
+    .from(schema.auditEvents)
+    .where(eq(schema.auditEvents.workspaceId, workspaceId))
+    .orderBy(desc(schema.auditEvents.createdAt))
+    .limit(50);
+
   return rows.map((r) => ({
     id: r.id,
-    actorUserId: r.actor_user_id,
+    actorUserId: r.actorUserId,
     action: r.action,
-    toolId: r.tool_id,
+    toolId: r.toolId,
     detail: r.detail,
-    createdAt: r.created_at,
+    createdAt: r.createdAt.toISOString(),
   }));
 }
 
 export async function callTool(workspaceId: string, userId: string, toolId: string, args: Record<string, unknown>) {
-  const tool = getTool(workspaceId, toolId);
-  assertCanUse(tool, userId);
+  const tool = await getTool(workspaceId, toolId);
+  await assertCanUse(tool, userId);
 
   try {
     let cypher: string;
@@ -190,13 +190,13 @@ export async function callTool(workspaceId: string, userId: string, toolId: stri
       rows = result.rows;
     } else {
       cypher = "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count";
-      rows = await graphEngine.getGraphStats(workspaceId).then((s) => [s]);
+      rows = [await graphEngine.getGraphStats(workspaceId)];
     }
 
-    audit(workspaceId, userId, "tool.called", toolId, `${tool.name} v${tool.version}`);
+    recordAudit(workspaceId, userId, "tool.called", toolId, `${tool.name} v${tool.version}`);
     return { cypher, rows, toolVersion: tool.version };
   } catch (error) {
-    audit(workspaceId, userId, "tool.call_failed", toolId, error instanceof Error ? error.message : "error");
+    recordAudit(workspaceId, userId, "tool.call_failed", toolId, error instanceof Error ? error.message : "error");
     throw error;
   }
 }

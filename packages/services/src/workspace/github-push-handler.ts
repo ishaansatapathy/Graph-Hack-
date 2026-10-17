@@ -5,14 +5,14 @@ import { graphWrite } from "../graph/falkordb";
 import * as workspaceDb from "./db";
 import { decryptJson } from "./secrets";
 
-function readGithubConfig(workspaceId: string) {
-  const row = workspaceDb.getIntegration(workspaceId, "github");
+async function readGithubConfig(workspaceId: string) {
+  const row = await workspaceDb.getIntegration(workspaceId, "github");
   if (!row) return null;
   return decryptJson(row.config_encrypted);
 }
 
 async function postSlack(workspaceId: string, text: string) {
-  const row = workspaceDb.getIntegration(workspaceId, "slack");
+  const row = await workspaceDb.getIntegration(workspaceId, "slack");
   if (!row) return;
   const { webhookUrl } = decryptJson(row.config_encrypted) as { webhookUrl?: string };
   if (!webhookUrl) return;
@@ -24,7 +24,7 @@ async function postSlack(workspaceId: string, text: string) {
 }
 
 async function commentJira(workspaceId: string, issueKey: string, body: string) {
-  const row = workspaceDb.getIntegration(workspaceId, "jira");
+  const row = await workspaceDb.getIntegration(workspaceId, "jira");
   if (!row) return;
   const config = decryptJson(row.config_encrypted) as {
     baseUrl?: string;
@@ -167,18 +167,18 @@ export async function handleGithubPush(workspaceId: string, payload: GithubPushP
     );
   }
 
-  const gh = readGithubConfig(workspaceId);
+  const gh = await readGithubConfig(workspaceId);
   return {
     ok: true,
     repo: summary.repo,
     sha: summary.sha,
-    filesIngested: 0, // populated by caller if needed
+    filesIngested: 0,
     jiraKeys,
     webhookRegistered: Boolean(gh?.repositoryFullName),
   };
 }
 
-export function getGithubWebhookSecretForWorkspace(workspaceId: string) {
-  const config = readGithubConfig(workspaceId);
+export async function getGithubWebhookSecretForWorkspace(workspaceId: string): Promise<string> {
+  const config = await readGithubConfig(workspaceId);
   return config?.webhookSecret?.trim() ?? "";
 }

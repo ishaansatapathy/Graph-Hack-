@@ -12,7 +12,11 @@
     "dev:web": "npm run dev -w @stackfox/web",
     "check-types": "npm run check-types -w @stackfox/services && npm run check-types -w @stackfox/trpc && npm run check-types -w @stackfox/api && npm run check-types -w @stackfox/web",
     "db:up": "docker compose up -d",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "db:push": "dotenv -e .env -- npx drizzle-kit push",
+    "db:generate": "dotenv -e .env -- npx drizzle-kit generate",
+    "db:migrate": "dotenv -e .env -- npx drizzle-kit migrate",
+    "db:studio": "dotenv -e .env -- npx drizzle-kit studio"
   },
   "engines": {
     "node": ">=20"

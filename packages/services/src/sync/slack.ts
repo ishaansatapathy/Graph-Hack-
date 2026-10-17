@@ -32,7 +32,7 @@ type SlackChannel = { id: string; name: string };
 type SlackMessage = { ts: string; text: string; user?: string };
 
 export async function syncSlackToGraph(workspaceId: string): Promise<SlackSyncResult> {
-  const row = workspaceDb.getIntegration(workspaceId, "slack");
+  const row = await workspaceDb.getIntegration(workspaceId, "slack");
   if (!row) throw new Error("Slack is not connected for this workspace");
 
   const config = decryptJson(row.config_encrypted) as {

@@ -164,22 +164,16 @@ class AuthService {
       let user = await this.findUserByEmail(sanitizedEmail);
 
       if (!user) {
-        const id = crypto.randomUUID();
-        const newUser: DbUser = {
-          id,
-          full_name: payload.name?.trim() || sanitizedEmail.split("@")[0] || "User",
-          display_name: null,
+        user = await userDb.insertUser({
+          id: crypto.randomUUID(),
           email: sanitizedEmail,
-          email_verified: 1,
-          auth_provider: "google",
-          provider_id: payload.sub,
-          profile_image_url: payload.picture ?? null,
-          token_version: "0",
-          role: "user",
-        };
-        userDb.insertUser(newUser);
-        user = newUser;
-      } else if (user.auth_provider !== "google") {
+          fullName: payload.name?.trim() || sanitizedEmail.split("@")[0] || "User",
+          displayName: payload.name?.trim() || sanitizedEmail.split("@")[0] || "User",
+          profileImageUrl: payload.picture ?? null,
+          provider: "google",
+          providerId: payload.sub,
+        });
+      } else if (user.provider !== "google") {
         throw new AuthError(
           "CONFLICT",
           "An account with this email already exists. Sign in with your original method.",
@@ -189,12 +183,10 @@ class AuthService {
           throw new AuthError("CONFLICT", "This email is linked to a different Google account.");
         }
         if (!user.provider_id) {
-          userDb.updateUserProvider(
-            user.id,
-            payload.sub,
-            payload.picture ?? null,
-            payload.email_verified ?? false,
-          );
+          await userDb.updateUserProvider(user.id, {
+            providerId: payload.sub,
+            profileImageUrl: payload.picture ?? null,
+          });
           user = (await this.findUserById(user.id))!;
         }
       }

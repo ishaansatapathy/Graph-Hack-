@@ -1,23 +1,27 @@
 /**
  * Orchestrator for integration → FalkorDB syncs.
- * Wraps each provider sync with run-tracking (sync_runs table) and
+ * Wraps each provider sync with run-tracking (Neon sync_runs) and
  * deduplication (skips if a sync is still running).
  */
 
-import * as syncDb from "./db";
+import { childLogger } from "../logger";
+import { syncDb } from "./db";
 import { syncJiraToGraph } from "./jira";
 import { syncSlackToGraph } from "./slack";
 
+const log = childLogger("sync");
+
 export type SyncProvider = "jira" | "slack";
 
-export async function triggerSync(workspaceId: string, provider: SyncProvider) {
-  if (syncDb.isRunning(workspaceId, provider)) {
+export async function triggerSync(workspaceId: string, provider: SyncProvider): Promise<string> {
+  if (await syncDb.isRunning(workspaceId, provider)) {
     throw new Error(`A ${provider} sync is already running — please wait`);
   }
 
-  const runId = syncDb.startRun(workspaceId, provider);
+  const runId = await syncDb.startRun(workspaceId, provider);
+  log.info({ workspaceId, provider, runId }, "Sync started");
 
-  // Run async (fire-and-forget from the caller's perspective, tracked in DB)
+  // Fire-and-forget — tracked in DB
   void (async () => {
     try {
       let items = 0;
@@ -36,9 +40,12 @@ export async function triggerSync(workspaceId: string, provider: SyncProvider) {
             : "Webhook-only mode — add a Slack bot token for full message ingestion";
       }
 
-      syncDb.finishRun(runId, "ok", items, message);
+      await syncDb.finishRun(runId, "ok", items, message);
+      log.info({ workspaceId, provider, runId, items }, "Sync completed");
     } catch (err) {
-      syncDb.finishRun(runId, "error", 0, err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      await syncDb.finishRun(runId, "error", 0, msg);
+      log.error({ workspaceId, provider, runId, err }, "Sync failed");
     }
   })();
 

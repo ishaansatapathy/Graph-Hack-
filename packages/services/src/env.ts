@@ -40,6 +40,10 @@ const envSchema = z.object({
   FALKORDB_GRAPH: z.string().optional(),
   FALKORDB_PASSWORD: z.preprocess(emptyToUndefined, z.string().optional()),
   OPENAI_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+  DATABASE_URL: z.preprocess(emptyToUndefined, z.string().optional()),
+  FP_SALT: z.string().optional(),
+  ENCRYPTION_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).optional(),
 });
 
 function createEnv(env: NodeJS.ProcessEnv) {

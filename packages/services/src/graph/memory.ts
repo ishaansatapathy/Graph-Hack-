@@ -1,32 +1,23 @@
 /**
- * Agent memory: sliding-window conversation history stored in SQLite.
+ * Agent memory: sliding-window conversation history — Neon/PostgreSQL.
  *
  * Each "thread" (workspace + user) keeps the last N turns so the AI agent
  * has cross-request context without blowing a token limit.
+ *
+ * All functions are now async (Drizzle/Neon instead of SQLite).
  */
 
 import crypto from "node:crypto";
 
-import { sqlite } from "../workspace/db";
+import { and, asc, desc, eq, notInArray } from "drizzle-orm";
+
+import { db, schema } from "../db/client";
 import { redactSecrets } from "./redact";
 
 /** Maximum message pairs (user+assistant) retained per thread. */
 const MAX_TURNS = 20;
 /** Maximum bytes stored per single message content field. */
 const MAX_CONTENT_BYTES = 8000;
-
-sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS agent_memory (
-    id          TEXT PRIMARY KEY,
-    workspace_id TEXT NOT NULL,
-    user_id     TEXT NOT NULL,
-    role        TEXT NOT NULL,
-    content     TEXT NOT NULL,
-    created_at  TEXT NOT NULL
-  );
-  CREATE INDEX IF NOT EXISTS agent_memory_thread
-    ON agent_memory (workspace_id, user_id, created_at);
-`);
 
 export type MemoryRole = "user" | "assistant" | "system";
 
@@ -37,77 +28,76 @@ export type MemoryMessage = {
   createdAt: string;
 };
 
-type Row = {
-  id: string;
-  role: string;
-  content: string;
-  created_at: string;
-};
+// ── Write ─────────────────────────────────────────────────────────────────────
 
-// ---------------------------------------------------------------------------
-
-export function appendMessage(
+export async function appendMessage(
   workspaceId: string,
   userId: string,
   role: MemoryRole,
   content: string,
-): MemoryMessage {
+): Promise<MemoryMessage> {
   const id = crypto.randomUUID();
-  const createdAt = new Date().toISOString();
   const truncated = redactSecrets(content).slice(0, MAX_CONTENT_BYTES);
 
-  sqlite
-    .prepare(
-      `INSERT INTO agent_memory (id, workspace_id, user_id, role, content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-    .run(id, workspaceId, userId, role, truncated, createdAt);
+  await db.insert(schema.agentMemory).values({
+    id,
+    workspaceId,
+    userId,
+    role,
+    content: truncated,
+  });
 
-  // Prune old messages beyond the window
-  pruneThread(workspaceId, userId);
+  // Prune beyond window (non-blocking)
+  void pruneThread(workspaceId, userId);
 
-  return { id, role, content: truncated, createdAt };
+  return { id, role, content: truncated, createdAt: new Date().toISOString() };
 }
 
-export function getThread(workspaceId: string, userId: string): MemoryMessage[] {
-  const rows = sqlite
-    .prepare(
-      `SELECT id, role, content, created_at
-       FROM agent_memory
-       WHERE workspace_id = ? AND user_id = ?
-       ORDER BY created_at ASC
-       LIMIT ?`,
-    )
-    .all(workspaceId, userId, MAX_TURNS * 2 + 2) as Row[];
+// ── Read ──────────────────────────────────────────────────────────────────────
+
+export async function getThread(workspaceId: string, userId: string): Promise<MemoryMessage[]> {
+  const rows = await db.select()
+    .from(schema.agentMemory)
+    .where(and(eq(schema.agentMemory.workspaceId, workspaceId), eq(schema.agentMemory.userId, userId)))
+    .orderBy(asc(schema.agentMemory.createdAt))
+    .limit(MAX_TURNS * 2 + 2);
 
   return rows.map((r) => ({
     id: r.id,
     role: r.role as MemoryRole,
     content: r.content,
-    createdAt: r.created_at,
+    createdAt: r.createdAt.toISOString(),
   }));
 }
 
-export function clearThread(workspaceId: string, userId: string): number {
-  const info = sqlite
-    .prepare("DELETE FROM agent_memory WHERE workspace_id = ? AND user_id = ?")
-    .run(workspaceId, userId);
-  return info.changes;
+// ── Delete ────────────────────────────────────────────────────────────────────
+
+export async function clearThread(workspaceId: string, userId: string): Promise<number> {
+  const deleted = await db.delete(schema.agentMemory)
+    .where(and(eq(schema.agentMemory.workspaceId, workspaceId), eq(schema.agentMemory.userId, userId)))
+    .returning({ id: schema.agentMemory.id });
+  return deleted.length;
 }
 
-// Keep only the latest MAX_TURNS * 2 rows for this thread
-function pruneThread(workspaceId: string, userId: string) {
+// ── Prune ─────────────────────────────────────────────────────────────────────
+
+async function pruneThread(workspaceId: string, userId: string): Promise<void> {
   const keep = MAX_TURNS * 2;
-  sqlite
-    .prepare(
-      `DELETE FROM agent_memory
-       WHERE workspace_id = ? AND user_id = ?
-         AND id NOT IN (
-           SELECT id FROM agent_memory
-           WHERE workspace_id = ? AND user_id = ?
-           ORDER BY created_at DESC
-           LIMIT ?
-         )`,
-    )
-    .run(workspaceId, userId, workspaceId, userId, keep);
+
+  // Get IDs to keep (most recent N)
+  const keepers = await db.select({ id: schema.agentMemory.id })
+    .from(schema.agentMemory)
+    .where(and(eq(schema.agentMemory.workspaceId, workspaceId), eq(schema.agentMemory.userId, userId)))
+    .orderBy(desc(schema.agentMemory.createdAt))
+    .limit(keep);
+
+  if (keepers.length < keep) return; // Nothing to prune
+
+  const keepIds = keepers.map((r) => r.id);
+  await db.delete(schema.agentMemory)
+    .where(and(
+      eq(schema.agentMemory.workspaceId, workspaceId),
+      eq(schema.agentMemory.userId, userId),
+      notInArray(schema.agentMemory.id, keepIds),
+    ));
 }
