@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useFingerprint } from "~/lib/fingerprint";
 import { trpc } from "~/lib/trpc";
 
 type GNode = { id: string; label: string; title: string; properties: Record<string, unknown> };
@@ -55,9 +56,11 @@ export default function GraphAgentPage() {
 
   const [question, setQuestion] = useState("What is the context around verifyToken?");
   const [answer, setAnswer] = useState("");
+  const [answerMeta, setAnswerMeta] = useState<{ model: string; complexity: string; chunkCount: number } | null>(null);
   const [cypher, setCypher] = useState<string[]>([]);
   const [asking, setAsking] = useState(false);
   const [evidenceCount, setEvidenceCount] = useState(0);
+  const fp = useFingerprint();
 
   const [rawCypher, setRawCypher] = useState("MATCH (c:Commit)-[:REFERENCES]->(i:Issue) RETURN c.sha, i.key");
   const [rawOut, setRawOut] = useState("");
@@ -119,13 +122,23 @@ export default function GraphAgentPage() {
     if (!question.trim() || !workspaceId) return;
     setAsking(true);
     setAnswer("");
+    setAnswerMeta(null);
     setCypher([]);
     setEvidenceCount(0);
     try {
-      const result = await trpc.graph.ask.mutate({ workspaceId, question: question.trim() });
+      const result = await trpc.graph.ask.mutate({
+        workspaceId,
+        question: question.trim(),
+        fp: fp ?? undefined,
+      });
       setAnswer(result?.answer ?? "");
       setCypher(result?.cypher ?? []);
       setEvidenceCount(result?.evidenceCount ?? 0);
+      setAnswerMeta({
+        model: result?.model ?? "",
+        complexity: result?.complexity ?? "",
+        chunkCount: result?.chunkCount ?? 0,
+      });
       void loadMemory();
     } catch (err) {
       setAnswer(err instanceof Error ? err.message : "Request failed");
@@ -272,6 +285,12 @@ export default function GraphAgentPage() {
           {evidenceCount > 0 ? (
             <span className="app-pill app-pill--on" style={{ marginLeft: "0.5rem", fontSize: "0.7rem" }}>
               {evidenceCount} evidence nodes
+            </span>
+          ) : null}
+          {answerMeta ? (
+            <span className="app-muted" style={{ fontSize: "0.7rem", marginLeft: "0.5rem" }}>
+              {answerMeta.model} · {answerMeta.complexity}
+              {answerMeta.chunkCount > 0 ? ` · ${answerMeta.chunkCount} chunks` : ""}
             </span>
           ) : null}
           <pre className="app-cypher">{answer}</pre>
