@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckCircle2, FileCode2, GitBranch, GitCommit, RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/state";
@@ -88,71 +88,134 @@ export function ConflictsView({ onOpenTab }: { onOpenTab?: OpenTab }) {
         </div>
       ) : (
         <div className="space-y-6">
-          {conflicts.map((c) => {
-            const r = reviews[c.id];
-            return (
-              <article key={c.id} className="rounded-lg border border-line bg-surface-1 p-5">
-                <header className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
-                  <div className="flex min-w-0 items-center gap-2 font-mono text-[12.5px]">
-                    <FileCode2 className="size-4 shrink-0 text-conflict" />
-                    <span className="truncate text-fg">{c.file}</span>
-                    <span className="rounded bg-surface-2 px-1.5 text-[10px] uppercase text-fg-3">{c.source === "import" ? "repo import" : "pushed commits"}</span>
-                  </div>
-                  <Button size="sm" variant="primary" onClick={() => void review(c)} disabled={r?.status === "loading"} className="gap-2">
-                    {r?.status === "loading" ? <RefreshCw className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-accent-ink" />}
-                    {r?.status === "done" ? "Review again" : "Review with AI"}
-                  </Button>
-                </header>
-
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <Side branch={c.branchA} author={c.authorA} sha={c.commitShaA} message={c.messageA} tone="text-accent" />
-                  <Side branch={c.branchB} author={c.authorB} sha={c.commitShaB} message={c.messageB} tone="text-agent-b" />
-                </div>
-
-                <div className="mt-4 font-mono text-[11.5px] text-fg-2">
-                  {c.evidence === "overlapping_hunks" ? (
-                    <p>
-                      <span className="text-conflict">Overlapping edits:</span> {c.overlappingLines?.join(", ")}
-                    </p>
-                  ) : (
-                    <p className="text-fg-3">
-                      Line-level evidence unavailable{c.source === "import" ? " for imported branches" : " — connect GitHub with the repository to compare diffs"}.
-                    </p>
-                  )}
-                </div>
-
-                {(c.patchA || c.patchB) && (
-                  <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-                    {[c.patchA, c.patchB].map((patch, i) =>
-                      patch ? (
-                        <pre key={i} className="max-h-64 overflow-auto rounded border border-line bg-surface-2 p-2.5 font-mono text-[11px] leading-relaxed text-fg-2">
-                          {patch}
-                        </pre>
-                      ) : null,
-                    )}
-                  </div>
-                )}
-
-                {r?.status === "error" && <p className="mt-4 font-mono text-[12px] text-conflict">{r.message}</p>}
-                {r?.status === "done" && (
-                  <div className="mt-4 rounded-lg border border-accent/30 bg-accent/5 p-4">
-                    <div className="mb-2 flex items-center justify-between font-mono text-[11px] text-fg-3">
-                      <span className="text-accent">AI review · {r.review.model}</span>
-                      <span>{r.review.graphContextUsed ? "used graph context" : "no graph context found"}</span>
-                    </div>
-                    {r.review.rateLimited ? (
-                      <p className="text-[12.5px] text-risk">The AI provider rate-limited this request. Try again shortly.</p>
-                    ) : (
-                      <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-fg">{r.review.suggestion}</p>
-                    )}
-                    <p className="mt-3 text-[11px] text-fg-3">Advice only — nothing was changed, merged, or tested.</p>
-                  </div>
-                )}
-              </article>
-            );
-          })}
+          {conflicts.map((c) => (
+            <ConflictCard key={c.id} c={c} r={reviews[c.id]} onReview={() => void review(c)} />
+          ))}
         </div>
       )}
+    </div>
+  );
+}
+
+interface FileInsight {
+  owners: { author: string; commits: number }[];
+  impact: { caller: string; file: string }[];
+  issues: { key: string; title: string; status: string }[];
+  primaryOwner: string | null;
+}
+
+/** Same rule as the conflict reviewer: a side is outside its usual area if none of its authors does much in this file. */
+function outsideUsualArea(insight: FileInsight, sides: string[]) {
+  const primary = insight.owners[0];
+  if (!primary) return [];
+  return sides.filter((side) => {
+    const names = side.split(",").map((n) => n.trim()).filter(Boolean);
+    if (names.length === 0 || names.includes(primary.author)) return false;
+    const share = Math.max(0, ...names.map((n) => insight.owners.find((o) => o.author === n)?.commits ?? 0));
+    return share * 3 < primary.commits;
+  });
+}
+
+function insightSummary(insight: FileInsight | null) {
+  if (!insight) return "Loading graph context…";
+  return [
+    insight.primaryOwner ? `Owner: ${insight.primaryOwner}` : "No ownership history in the graph",
+    insight.issues.length ? `Issues: ${insight.issues.map((i) => i.key).join(", ")}` : "",
+    insight.impact.length ? `${insight.impact.length} dependent caller(s) in other files` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function ConflictCard({ c, r, onReview }: { c: Conflict; r?: ReviewState; onReview: () => void }) {
+  const [insight, setInsight] = useState<FileInsight | null>(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    apiFetch<FileInsight>(`/api/graph/file-insight?file=${encodeURIComponent(c.file)}`, { signal: ctrl.signal })
+      .then(setInsight)
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [c.file]);
+
+  return (
+    <article className="rounded-lg border border-line bg-surface-1 p-5">
+      <header className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <div className="flex min-w-0 items-center gap-2 font-mono text-[12.5px]">
+          <FileCode2 className="size-4 shrink-0 text-conflict" />
+          <span className="cursor-help truncate text-fg" title={insightSummary(insight)}>{c.file}</span>
+          <span className="rounded bg-surface-2 px-1.5 text-[10px] uppercase text-fg-3">{c.source === "import" ? "repo import" : "pushed commits"}</span>
+        </div>
+        <Button size="sm" variant="primary" onClick={onReview} disabled={r?.status === "loading"} className="gap-2">
+          {r?.status === "loading" ? <RefreshCw className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-accent-ink" />}
+          {r?.status === "done" ? "Review again" : "Review with AI"}
+        </Button>
+      </header>
+
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <Side branch={c.branchA} author={c.authorA} sha={c.commitShaA} message={c.messageA} tone="text-accent" />
+        <Side branch={c.branchB} author={c.authorB} sha={c.commitShaB} message={c.messageB} tone="text-agent-b" />
+      </div>
+
+      <div className="mt-4 font-mono text-[11.5px] text-fg-2">
+        {c.evidence === "overlapping_hunks" ? (
+          <p>
+            <span className="text-conflict">Overlapping edits:</span> {c.overlappingLines?.join(", ")}
+          </p>
+        ) : (
+          <p className="text-fg-3">
+            Line-level evidence unavailable{c.source === "import" ? " for imported branches" : " — connect GitHub with the repository to compare diffs"}.
+          </p>
+        )}
+      </div>
+
+      {(c.patchA || c.patchB) && (
+        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {[c.patchA, c.patchB].map((patch, i) =>
+            patch ? (
+              <pre key={i} className="max-h-64 overflow-auto rounded border border-line bg-surface-2 p-2.5 font-mono text-[11px] leading-relaxed text-fg-2">
+                {patch}
+              </pre>
+            ) : null,
+          )}
+        </div>
+      )}
+
+      <InsightPanel conflict={c} insight={insight} />
+
+    {r?.status === "error" && <p className="mt-4 font-mono text-[12px] text-conflict">{r.message}</p>}
+      {r?.status === "done" && (
+        <div className="mt-4 rounded-lg border border-accent/30 bg-accent/5 p-4">
+          <div className="mb-2 flex items-center justify-between font-mono text-[11px] text-fg-3">
+            <span className="text-accent">AI review · {r.review.model}</span>
+            <span>{r.review.graphContextUsed ? "used graph context" : "no graph context found"}</span>
+          </div>
+          {r.review.rateLimited ? (
+            <p className="text-[12.5px] text-risk">The AI provider rate-limited this request. Try again shortly.</p>
+          ) : (
+            <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-fg">{r.review.suggestion}</p>
+          )}
+          <p className="mt-3 text-[11px] text-fg-3">Advice only — nothing was changed, merged, or tested.</p>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function InsightPanel({ conflict: c, insight }: { conflict: Conflict; insight: FileInsight | null }) {
+  if (!insight || (!insight.owners.length && !insight.issues.length && !insight.impact.length)) return null;
+  const outsiders = outsideUsualArea(insight, [c.authorA, c.authorB]);
+  return (
+    <div className="mt-4 space-y-1.5 rounded-lg border border-line bg-surface-2/40 p-3 font-mono text-[11.5px] text-fg-2">
+      <p className="text-[10.5px] uppercase tracking-wider text-fg-3">Graph context · FalkorDB</p>
+      {outsiders.map((author) => (
+        <p key={author} className="text-risk">
+          {author} rarely works in this file; {insight.primaryOwner} usually does. Ask them to review that side.
+        </p>
+      ))}
+      {insight.owners.length > 0 && <p>Owners: {insight.owners.map((o) => `${o.author} (${o.commits})`).join(", ")}</p>}
+      {insight.issues.length > 0 && (
+        <p>Linked issues: {insight.issues.map((i) => `${i.key}${i.title ? ` ${i.title}` : ""}${i.status ? ` [${i.status}]` : ""}`).join(" · ")}</p>
+      )}
+      {insight.impact.length > 0 && <p>Re-test callers: {insight.impact.map((i) => `${i.caller} (${i.file})`).join(", ")}</p>}
     </div>
   );
 }

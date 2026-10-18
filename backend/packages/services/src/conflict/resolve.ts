@@ -10,7 +10,7 @@
  */
 
 import { completeWithGraphContext, type Message } from "../ai/router";
-import { fileOwners, impactRadius } from "../graph/advanced";
+import { authorsOutsideUsualArea, fileOwners, impactRadius } from "../graph/advanced";
 import { graphRead } from "../graph/falkordb";
 import type { ConflictRecord } from "./detect";
 
@@ -84,11 +84,8 @@ async function buildConflictContext(workspaceId: string, conflict: ConflictRecor
     lines.push("\n### File ownership (commits touching this file):");
     for (const o of owners) lines.push(`- ${o.author}: ${o.commits} commit(s)`);
     const primary = owners[0]!;
-    for (const author of [conflict.authorA, conflict.authorB]) {
-      const share = owners.find((o) => o.author === author)?.commits ?? 0;
-      if (author !== primary.author && share * 3 < primary.commits) {
-        lines.push(`- Ownership warning: ${author} rarely touches this file; ${primary.author} is the primary owner. Treat ${author}'s unrelated edits here with extra scrutiny.`);
-      }
+    for (const author of authorsOutsideUsualArea(owners, [conflict.authorA, conflict.authorB])) {
+      lines.push(`- Ownership warning: ${author} rarely touches this file; ${primary.author} is the primary owner. Treat ${author}'s unrelated edits here with extra scrutiny.`);
     }
   }
 

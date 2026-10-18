@@ -147,22 +147,61 @@ export async function impactRadius(workspaceId: string, file: string) {
   return (rows ?? []).map((r) => ({ caller: String(r.caller), file: String(r.file) }));
 }
 
-/** Authors ranked by how many commits touched the file: the graph's notion of who owns it. */
+/**
+ * Authors ranked by how many commits touched the file: the graph's notion of who owns it.
+ * Counts pushed commits (Commit -MODIFIED-> File) and imported branches (Change -MODIFIES-> File,
+ * whose `authors` is a comma-separated list, weighted by the branch's commit count).
+ */
 export async function fileOwners(workspaceId: string, file: string) {
-  const rows = await tryFalkor(
-    workspaceId,
-    `MATCH (c:Commit)-[:MODIFIED]->(f:File {path: $file})
-     RETURN c.author AS author, count(c) AS commits ORDER BY commits DESC LIMIT 5`,
-    { file },
-  );
-  return (rows ?? []).map((r) => ({ author: String(r.author), commits: Number(r.commits) }));
+  const [commitRows, changeRows] = await Promise.all([
+    tryFalkor(
+      workspaceId,
+      `MATCH (c:Commit)-[:MODIFIED]->(f:File {path: $file})
+       RETURN c.author AS author, count(c) AS commits ORDER BY commits DESC LIMIT 20`,
+      { file },
+    ),
+    tryFalkor(
+      workspaceId,
+      `MATCH (c:Change)-[:MODIFIES]->(f:File {path: $file})
+       RETURN c.authors AS authors, c.commitCount AS commits LIMIT 50`,
+      { file },
+    ),
+  ]);
+  const totals = new Map<string, number>();
+  const add = (author: string, commits: number) => {
+    const name = author.trim();
+    if (name) totals.set(name, (totals.get(name) ?? 0) + Math.max(1, commits));
+  };
+  for (const r of commitRows ?? []) add(String(r.author ?? ""), Number(r.commits ?? 1));
+  for (const r of changeRows ?? []) {
+    for (const author of String(r.authors ?? "").split(",")) add(author, Number(r.commits ?? 1));
+  }
+  return [...totals.entries()]
+    .map(([author, commits]) => ({ author, commits }))
+    .sort((a, b) => b.commits - a.commits)
+    .slice(0, 5);
 }
 
-/** Issues and discussions linked to a file through the commits that changed it. */
+/**
+ * Conflict sides whose authors rarely touch the file compared with its primary owner.
+ * A side may list several authors ("alice, bob"); it counts as inside if any of them does.
+ */
+export function authorsOutsideUsualArea(owners: { author: string; commits: number }[], sides: string[]) {
+  const primary = owners[0];
+  if (!primary) return [];
+  return sides.filter((side) => {
+    const names = side.split(",").map((n) => n.trim()).filter(Boolean);
+    if (names.length === 0 || names.includes(primary.author)) return false;
+    const share = Math.max(0, ...names.map((n) => owners.find((o) => o.author === n)?.commits ?? 0));
+    return share * 3 < primary.commits;
+  });
+}
+
+/** Issues linked to a file through the commits or imported branches that changed it. */
 export async function fileLinkedWork(workspaceId: string, file: string) {
   const rows = await tryFalkor(
     workspaceId,
-    `MATCH (f:File {path: $file})<-[:MODIFIED]-(c:Commit)-[:REFERENCES]->(i:Issue)
+    `MATCH (f:File {path: $file})<-[:MODIFIED|MODIFIES]-(c)-[:REFERENCES]->(i:Issue)
      RETURN DISTINCT i.key AS key, i.title AS title, i.status AS status LIMIT 10`,
     { file },
   );

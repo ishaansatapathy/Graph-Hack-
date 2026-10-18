@@ -13,6 +13,7 @@ import {
   createGithubPullRequest,
   createWorkspaceService,
   ensureGithubEditBranch,
+  fileInsight,
   getApiPublicUrl,
   getOrCreateWorkspaceForUser,
   getWorkspaceAiUsage,
@@ -292,6 +293,16 @@ platformRouter.post(
       // Read-only guard violations and Cypher syntax errors are about the user's query.
       throw new UserError(error instanceof Error ? error.message : "Query failed");
     }
+  }),
+);
+
+// ── Graph: owners, linked issues and dependent callers for one file ──────────
+
+platformRouter.get(
+  "/api/graph/file-insight",
+  route(async (req, { workspaceId }) => {
+    const { file } = z.object({ file: z.string().trim().min(1, "file is required").max(500) }).parse(req.query);
+    return fileInsight(workspaceId, file);
   }),
 );
 
