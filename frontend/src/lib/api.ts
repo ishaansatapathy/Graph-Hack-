@@ -1,6 +1,6 @@
-import type { ApiError, ScenarioSnapshot, StreamEvent } from "./types";
+import type { ApiError, ImportResult, ScenarioSnapshot, StreamEvent } from "./types";
 
-/** Single client for every SYNK endpoint the UI talks to. */
+/** Single client for every Stackfox endpoint the UI talks to. */
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -8,8 +8,8 @@ export class ApiRequestError extends Error {
   }
 }
 
-async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(path, { signal, cache: "no-store" });
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(path, { cache: "no-store", ...init });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as ApiError | null;
     throw new ApiRequestError(body?.error ?? `${res.status} ${res.statusText}`, res.status);
@@ -18,17 +18,23 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
 }
 
 export const api = {
-  scenario: (signal?: AbortSignal) => getJson<ScenarioSnapshot>("/api/scenario", signal),
+  scenario: (signal?: AbortSignal) => request<ScenarioSnapshot>("/api/scenario", { signal }),
 
-  /** Subscribe to the live run. Returns an unsubscribe fn. */
+  importRepo: (repo: string) =>
+    request<ImportResult>("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repo }),
+    }),
+
+  /** Subscribe to live workspace events. Returns an unsubscribe fn. */
   events(handlers: {
     onEvent: (ev: StreamEvent) => void;
     onOpen?: () => void;
     onEnd?: () => void;
     onError?: (message: string) => void;
-    speed?: number;
   }): () => void {
-    const es = new EventSource(`/api/events?speed=${handlers.speed ?? 1}&t=${Date.now()}`);
+    const es = new EventSource(`/api/events?t=${Date.now()}`);
     let ended = false;
     es.onopen = () => handlers.onOpen?.();
     es.onmessage = (m) => handlers.onEvent(JSON.parse(m.data) as StreamEvent);
