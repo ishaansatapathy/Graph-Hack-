@@ -10,7 +10,7 @@ Stackfox imports a GitHub repository's branches, writes every pending change, fi
 |---|---|
 | **Live demo** | _add deployment URL_ |
 | **Demo video** | _add video link_ |
-| **Stack** | FalkorDB · Next.js 16 · Express + tRPC · Neon Postgres · OpenAI |
+| **Stack** | FalkorDB · Next.js 16 · Express + tRPC · Neon Postgres · OpenRouter / OpenAI · Render |
 
 ---
 
@@ -24,9 +24,10 @@ Stackfox imports a GitHub repository's branches, writes every pending change, fi
 6. [Dashboard](#dashboard)
 7. [Run it locally](#run-it-locally)
 8. [Configuration](#configuration)
-9. [Project layout](#project-layout)
-10. [Security](#security)
-11. [Limitations](#limitations)
+9. [Deploying](#deploying)
+10. [Project layout](#project-layout)
+11. [Security](#security)
+12. [Limitations](#limitations)
 
 ---
 
@@ -69,7 +70,7 @@ flowchart LR
 
   GH["GitHub API"]
   Ext["Jira · Slack"]
-  LLM["OpenAI<br/>gpt-4o / gpt-4o-mini"]
+  LLM["OpenRouter / OpenAI<br/>gpt-4o / gpt-4o-mini"]
 
   UI --> Proxy --> Auth & Live & Platform
   Live & Platform & Webhook --> Services
@@ -85,6 +86,7 @@ flowchart LR
 | Component | Responsibility |
 |---|---|
 | `frontend/` | Next.js App Router UI. Its `/api/*` route handlers proxy to the backend with the browser's session cookie, so the browser only ever talks to one origin. |
+| `backend/apps/web` | The workspace app: Google sign-in, invitations, members and roles, integrations, shared services, the IDE and the conflicts page. It proxies `/api-backend/*` to the API, so cookies stay same-origin. `frontend/` is the graph studio and landing page; both talk to the same API and graph. |
 | `backend/apps/api` | Express server: OAuth callbacks, the live SSE stream, the workspace-scoped REST API, GitHub webhooks and the tRPC endpoint. Every data route resolves the signed-in user's workspace first. |
 | `backend/packages/services` | All business logic: FalkorDB access, the GitHub importer, conflict detection, GraphRAG, Jira/Slack sync, the AI router and the Postgres data layer. |
 | **FalkorDB** | The source of truth for the code graph. Each workspace gets its own graph (`ws_<workspaceId>`), so tenants are isolated at the database level. |
@@ -108,6 +110,7 @@ flowchart LR
 | `SlackChannel` / `SlackMessage` | `name` / `text`, `user`, `ts`, `url` | Slack sync |
 | `Label` | `name` | Jira sync |
 | `Chunk` | `text`, `index` | GraphRAG chunking of commits and issues (no vector store) |
+| `Function`, `Decision`, `Discussion` | `name`, `file` / `title`, `rationale` / `text`, `channel` | Read by retrieval and the conflict reviewer. Nothing in the importer or syncs writes them yet, so they appear only if you add them (see [Limitations](#limitations)). |
 
 ### Relationships
 
@@ -120,6 +123,7 @@ graph LR
   Change -->|REFERENCES| Issue
   Commit -->|MODIFIED| File
   Commit -->|REFERENCES| Issue
+  Commit -.->|LIKELY_RELATES| Issue
   Person -->|AUTHORED| Commit
   Conflict -->|AFFECTS| File
   Conflict -->|BETWEEN| Change
@@ -188,18 +192,31 @@ Node size is degree centrality computed from those edges, so the files that many
 
 Questions are answered from the graph, not from a vector store (`services/src/graph/rag.ts`, exposed as the tRPC procedure `graph.ask`):
 
-1. **Seed** — extract keywords and find matching nodes across `File`, `Commit`, `Issue`, `Conflict`, `SlackMessage`, `Person` and more, ranked in Cypher:
+1. **Index** — on first use each workspace graph gets range indexes on the lookup keys (`Function.name`, `File.path`, `Commit.sha`, `Issue.key`, …) and full-text indexes on commit messages, issue titles, discussions, decisions and chunks. Creation is idempotent.
+2. **Seed** — extract keywords, then merge two kinds of match across `File`, `Commit`, `Issue`, `Conflict`, `SlackMessage`, `Person` and more: property matches ranked in Cypher, and full-text hits from FalkorDB's index. Scores are combined and the top 8 become seeds:
    ```cypher
    MATCH (n:File) WHERE toLower(toString(n.path)) CONTAINS $k0_0
    RETURN id(n) AS id, labels(n)[0] AS label, properties(n) AS props, (...) AS retrievalScore
    ORDER BY retrievalScore DESC LIMIT 25
+
+   CALL db.idx.fulltext.queryNodes('Issue', $q) YIELD node, score
+   RETURN id(node) AS id, labels(node)[0] AS label, properties(node) AS props, score
+   ORDER BY score DESC LIMIT 5
    ```
-2. **Expand** — walk one hop out and in from each seed, prioritising `CALLS`, `TESTS`, `REFERENCES`, `MODIFIED`:
+3. **Expand** — walk one hop out and in from each seed, prioritising `CALLS`, `TESTS`, `REFERENCES`, `MODIFIED`:
    ```cypher
    MATCH (n)-[r]->(nb) WHERE id(n) = $id
    RETURN type(r) AS relType, labels(nb)[0] AS nbLabel, properties(nb) AS nbProps LIMIT 20
    ```
-3. **Answer** — the evidence (capped at ~14k characters) is the only context the model gets, and the executed Cypher is returned with the answer.
+4. **Go further** — for the three strongest seeds, follow 2–3 hop paths to issues, decisions, discussions, people, tests and commits (for example `Issue ← Commit → File ← Commit`), then ask for the shortest bounded path between the top two results:
+   ```cypher
+   MATCH p = (s)-[*2..3]-(t)
+   WHERE id(s) = $id AND labels(t)[0] IN $labels AND id(t) <> id(s)
+   RETURN [n IN nodes(p) | labels(n)[0]] AS labels, [r IN relationships(p) | type(r)] AS rels LIMIT 8
+   ```
+5. **Answer** — the evidence (capped at ~14k characters) is the only context the model gets, and the executed Cypher is returned with the answer.
+
+The full-text, multi-hop and path queries run only on a live FalkorDB graph and each fails independently, so a missing index or procedure falls back to the basic retrieval instead of failing the request. We have run them against a small sample graph on FalkorDB Cloud; they have not been benchmarked on large repositories.
 
 ### 4. AI conflict review
 
@@ -210,7 +227,25 @@ MATCH (c:Commit {sha: $shaA})-[:REFERENCES]->(i:Issue)
 RETURN i.key AS key, i.title AS title, i.status AS status
 ```
 
-It also looks for `Decision` and `Discussion` nodes that constrain or concern the affected code. The model is told to use only that evidence plus the diff excerpts, and the UI shows whether graph context was found — when nothing relevant is in the graph, it says so instead of inventing context.
+It also looks for `Decision` and `Discussion` nodes that constrain or concern the affected code, and adds two checks computed from the graph:
+
+- **Ownership** — authors ranked by how many commits touched the file. If a conflicting change comes from someone who rarely works in that file, the review says so and recommends the usual owner look at it.
+  ```cypher
+  MATCH (c:Commit)-[:MODIFIED]->(f:File {path: $file})
+  RETURN c.author AS author, count(c) AS commits ORDER BY commits DESC LIMIT 5
+  ```
+- **Impact radius** — callers in other files, up to two `CALLS` hops away, as a re-test list.
+  ```cypher
+  MATCH (f:Function) WHERE f.file = $file
+  MATCH (c:Function)-[:CALLS*1..2]->(f) WHERE c.file <> $file
+  RETURN DISTINCT c.name AS caller, c.file AS file LIMIT 15
+  ```
+
+The same data backs the `graph.fileInsight` procedure, used for the hover summary on a conflict's file name. The model is told to use only that evidence plus the diff excerpts, and the UI shows whether graph context was found — when nothing relevant is in the graph, it says so instead of inventing context.
+
+### 4b. Commits that find their task
+
+A push whose commit message has an explicit Jira key (`SF-12`) is linked to that issue, and moved to *In Progress* only if the Jira integration has that option enabled and the issue is not already there. For commits without a key, Stackfox suggests up to three likely issues from a full-text match on the message and from issues already linked to the files the commit changed. Suggestions are stored as `LIKELY_RELATES` edges and mentioned in the Slack summary. They never change a ticket.
 
 ### 5. Your own queries
 
@@ -319,16 +354,23 @@ To see the graph directly, open the FalkorDB Browser at http://localhost:3001 an
 | Variable | Required | Purpose |
 |---|---|---|
 | `DATABASE_URL` | yes | Postgres connection string |
-| `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_PASSWORD` | yes | FalkorDB connection (`localhost`, `6379`, empty locally) |
-| `JWT_SECRET` | yes | Signs session cookies and derives the key that encrypts stored integration secrets — set it once and keep it |
-| `CLIENT_URL` | yes | Frontend origin, e.g. `http://localhost:3000` |
+| `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_PASSWORD` | yes | FalkorDB connection (`localhost`, `6379`, empty locally). In production the host must not be localhost and a password is required |
+| `FALKORDB_USERNAME` | FalkorDB Cloud | ACL username (`falkordb` on the free tier); leave empty locally |
+| `FALKORDB_GRAPH` | optional | Default graph name (`stackfox`); workspaces use their own `ws_<id>` graph |
+| `JWT_SECRET` | yes | Signs session cookies. In production it must be at least 32 characters; the web and API services must share it |
+| `JWT_REFRESH_SECRET` | recommended | Signs refresh tokens |
+| `ENCRYPTION_KEY` | production | Encrypts stored integration and vault credentials (AES-256-GCM), at least 32 characters. Set it once and keep it, or saved credentials can no longer be decrypted. Outside production it falls back to `JWT_SECRET` |
+| `NODE_ENV` | yes | `production` turns on strict env checks and disables the in-memory graph fallback |
+| `DEV_LOGIN_ENABLED` | no | `true` allows passwordless dev sign-in; keep `false` in production |
+| `CLIENT_URL` | yes | Frontend origin, e.g. `http://localhost:3000` (HTTPS in production) |
 | `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET` | for GitHub sign-in | OAuth App callback: `<API_PUBLIC_URL>/auth/github/callback` |
 | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI` | for Google sign-in | redirect: `<CLIENT_URL>/api-auth/google/callback` |
 | `GITHUB_TOKEN` | recommended | Raises the GitHub API limit for imports from 60 to 5,000 requests/hour; needed for private repos |
-| `OPENAI_API_KEY` | for AI features | Conflict review and GraphRAG answers |
-| `API_PUBLIC_URL` | for webhooks | Public URL of the API (GitHub must reach `/webhooks/github`) |
-| `RESEND_API_KEY`, `EMAIL_FROM` | optional | Invitation and welcome emails |
-| `FP_SALT` | yes | Salt for device-fingerprint hashing used by AI rate limits |
+| `OPENAI_API_KEY` or `OPENROUTER_API_KEY` | for AI features | Conflict review and GraphRAG answers. If both are set, OpenRouter is used. Production requires one of them |
+| `API_PUBLIC_URL` | for webhooks | Public URL of the API (GitHub must reach `/webhooks/github`); HTTPS in production |
+| `API_INTERNAL_URL` | web app | Origin of the API that the web app proxies to |
+| `RESEND_API_KEY`, `EMAIL_FROM` | optional | Invitation and welcome emails. The default `onboarding@resend.dev` sender only delivers to the account owner, so use a verified domain to email teammates |
+| `FP_SALT` | yes | Salt for device-fingerprint hashing used by AI rate limits. At least 32 characters and not the example value in production, or the API refuses to start |
 
 `frontend` environment:
 
@@ -336,6 +378,27 @@ To see the graph directly, open the FalkorDB Browser at http://localhost:3001 an
 |---|---|---|
 | `STACKFOX_BACKEND_URL` | `http://localhost:8000` | Where the Next.js route handlers forward `/api/*` and `/live/*` |
 | `STACKFOX_DEMO_AUTH_ENABLED` | off | `true` enables passwordless email sign-in for local development only |
+
+---
+
+## Deploying
+
+`render.yaml` at the repository root describes the API, the workspace web app and a private FalkorDB service for Render. We run FalkorDB on [FalkorDB Cloud](https://app.falkordb.cloud) (free tier), which is a drop-in replacement: set `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_USERNAME` and `FALKORDB_PASSWORD`. TLS is not required for the free-tier endpoint.
+
+| Service | Root directory | Build | Start |
+|---|---|---|---|
+| API | `backend` | `npm install` | `npm run start:api` |
+| Workspace web app | `backend` | `npm install --include=dev && npm run build` | `npm run start:web` |
+| Graph studio (optional) | `frontend` | `npm install --include=dev && npm run build` | `npm run start` |
+
+Notes from deploying it:
+
+- **Run migrations separately.** `npm run db:migrate` (from `backend/`) applies the SQL migrations and records a checksum for each. Run it once against the production database before the first deploy and after adding a migration. Checksums ignore line endings, so a migration applied from Windows still verifies on Linux.
+- **Dev dependencies.** Render sets `NODE_ENV=production`, which skips `devDependencies`. The Next.js builds need them, hence `--include=dev`.
+- **Shared secrets.** The API and web services must use the same `JWT_SECRET`.
+- **Google OAuth.** Add `<web URL>` to the authorised JavaScript origins and `<web URL>/api-auth/google/callback` to the redirect URIs.
+- **GitHub, Jira and Slack** credentials are entered per workspace under **Integrations** after sign-in; they are stored encrypted in Postgres, not in the environment.
+- Free Render services sleep after inactivity, so open the URL once before a demo.
 
 ---
 
@@ -386,6 +449,11 @@ frontend/
 - AI review is advice only; it never edits, merges or runs tests.
 - `Decision` and `Discussion` nodes are read by the conflict reviewer but not yet produced by any sync, so reviews of imported branches usually report no graph context.
 - GraphRAG questions are available through the API (`graph.ask`); the new dashboard does not have a question box yet.
+- Retrieval is full-text plus graph traversal. There are no embeddings or vector search.
+- Co-editing in the IDE is draft sharing with polling (about every 2.5 seconds), not live cursors or a CRDT.
+- Ownership and impact-radius evidence depends on `Commit`, `File` and `Function`/`CALLS` data being present. `Function` and `CALLS` are not produced by the importer yet, so impact radius is empty until they are loaded.
+- Suggested issues for commits without a Jira key are guesses. They are labelled as such and never move a ticket.
+- There is no VS Code extension or downloadable IDE; the web workspace is the product.
 
 ---
 
