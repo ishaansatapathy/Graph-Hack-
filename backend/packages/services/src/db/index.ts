@@ -7,7 +7,7 @@
 
 import crypto from "node:crypto";
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 
 import { childLogger } from "../logger";
 import { db, schema } from "./client";
@@ -413,6 +413,104 @@ export async function incrementDeviceWindow(fpHash: string, windowStart: string)
     });
 }
 
+/** Atomically reserve a fixed-window request slot across all app instances. */
+export async function reserveApiKeyRequest(apiKeyId: string, windowStart: string, limit: number): Promise<boolean> {
+  const fpHash = `api:${crypto.createHash("sha256").update(apiKeyId).digest("hex")}`;
+  const rows = await db.insert(schema.deviceQuota)
+    .values({ fpHash, windowStart, requests: 1 })
+    .onConflictDoUpdate({
+      target: [schema.deviceQuota.fpHash, schema.deviceQuota.windowStart],
+      set: { requests: sql`${schema.deviceQuota.requests} + 1` },
+      setWhere: lt(schema.deviceQuota.requests, limit),
+    })
+    .returning({ requests: schema.deviceQuota.requests });
+  return rows.length > 0;
+}
+
+export async function reserveDeviceQuota(
+  fpHash: string,
+  minuteWindow: string,
+  dayWindow: string,
+  minuteLimit: number,
+  dayLimit: number,
+): Promise<"ok" | "device_rpm" | "device_rpd"> {
+  class QuotaExceeded extends Error {
+    constructor(readonly reason: "device_rpm" | "device_rpd") { super(reason); }
+  }
+  try {
+    await db.transaction(async (tx) => {
+      const daily = await tx.insert(schema.deviceQuota)
+        .values({ fpHash, windowStart: dayWindow, requests: 1 })
+        .onConflictDoUpdate({
+          target: [schema.deviceQuota.fpHash, schema.deviceQuota.windowStart],
+          set: { requests: sql`${schema.deviceQuota.requests} + 1` },
+          setWhere: lt(schema.deviceQuota.requests, dayLimit),
+        })
+        .returning({ requests: schema.deviceQuota.requests });
+      if (daily.length === 0) throw new QuotaExceeded("device_rpd");
+
+      const minute = await tx.insert(schema.deviceQuota)
+        .values({ fpHash, windowStart: minuteWindow, requests: 1 })
+        .onConflictDoUpdate({
+          target: [schema.deviceQuota.fpHash, schema.deviceQuota.windowStart],
+          set: { requests: sql`${schema.deviceQuota.requests} + 1` },
+          setWhere: lt(schema.deviceQuota.requests, minuteLimit),
+        })
+        .returning({ requests: schema.deviceQuota.requests });
+      if (minute.length === 0) throw new QuotaExceeded("device_rpm");
+    });
+    return "ok";
+  } catch (error) {
+    if (error instanceof Error && (error.message === "device_rpm" || error.message === "device_rpd")) {
+      return error.message;
+    }
+    throw error;
+  }
+}
+
+export async function claimGithubWebhookDelivery(workspaceId: string, deliveryId: string) {
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - 5 * 60_000);
+  const claimed = await db.insert(schema.githubWebhookDeliveries).values({
+    deliveryId,
+    workspaceId,
+    status: "processing",
+    startedAt: now,
+    finishedAt: null,
+  }).onConflictDoUpdate({
+    target: schema.githubWebhookDeliveries.deliveryId,
+    set: { status: "processing", startedAt: now, finishedAt: null },
+    setWhere: and(
+      eq(schema.githubWebhookDeliveries.workspaceId, workspaceId),
+      or(
+        eq(schema.githubWebhookDeliveries.status, "failed"),
+        lt(schema.githubWebhookDeliveries.startedAt, staleBefore),
+      ),
+    ),
+  }).returning({ deliveryId: schema.githubWebhookDeliveries.deliveryId });
+
+  if (claimed.length > 0) return { claimed: true as const };
+  const [existing] = await db.select({ status: schema.githubWebhookDeliveries.status })
+    .from(schema.githubWebhookDeliveries)
+    .where(eq(schema.githubWebhookDeliveries.deliveryId, deliveryId))
+    .limit(1);
+  if (!existing) throw new Error("GitHub delivery claim was not persisted");
+  return { claimed: false as const, status: existing.status };
+}
+
+export async function finishGithubWebhookDelivery(workspaceId: string, deliveryId: string, succeeded: boolean) {
+  const now = new Date();
+  const rows = await db.update(schema.githubWebhookDeliveries).set({
+    status: succeeded ? "succeeded" : "failed",
+    finishedAt: now,
+  }).where(and(
+    eq(schema.githubWebhookDeliveries.workspaceId, workspaceId),
+    eq(schema.githubWebhookDeliveries.deliveryId, deliveryId),
+    eq(schema.githubWebhookDeliveries.status, "processing"),
+  )).returning({ deliveryId: schema.githubWebhookDeliveries.deliveryId });
+  if (rows.length === 0) throw new Error("GitHub delivery is no longer owned by this worker");
+}
+
 export async function cleanupOldDeviceQuotas(): Promise<void> {
   const cutoff = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   await db.delete(schema.deviceQuota).where(sql`${schema.deviceQuota.windowStart} < ${cutoff}`);
@@ -422,6 +520,24 @@ export async function cleanupOldDeviceQuotas(): Promise<void> {
 
 export function hashApiKey(raw: string): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+export async function authenticateApiKey(raw: string): Promise<{ id: string; workspaceId: string } | null> {
+  const keyHash = hashApiKey(raw);
+  const now = new Date();
+  const [key] = await db.select({ id: schema.apiKeys.id, workspaceId: schema.apiKeys.workspaceId })
+    .from(schema.apiKeys)
+    .where(and(
+      eq(schema.apiKeys.keyHash, keyHash),
+      isNull(schema.apiKeys.revokedAt),
+      or(isNull(schema.apiKeys.expiresAt), gt(schema.apiKeys.expiresAt, now)),
+    ))
+    .limit(1);
+  if (!key) return null;
+  await db.update(schema.apiKeys)
+    .set({ lastUsedAt: now })
+    .where(eq(schema.apiKeys.id, key.id));
+  return key;
 }
 
 export function slugifyName(name: string): string {

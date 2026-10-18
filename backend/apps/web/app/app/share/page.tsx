@@ -6,12 +6,12 @@ import { SharePanel } from "~/components/app/share-panel";
 import { trpc } from "~/lib/trpc";
 
 export default function SharePage() {
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState<{ id: string; role: "owner" | "admin" | "member" } | null>(null);
 
   useEffect(() => {
-    void trpc.workspace.current.query({}).then((ws) => setWorkspaceId(ws.id));
+    void trpc.workspace.current.query({}).then((ws) => setWorkspace({ id: ws.id, role: ws.role }));
   }, []);
 
-  if (!workspaceId) return <p className="app-muted">Loading…</p>;
-  return <SharePanel workspaceId={workspaceId} />;
+  if (!workspace) return <p className="app-muted">Loading…</p>;
+  return <SharePanel workspaceId={workspace.id} role={workspace.role} />;
 }

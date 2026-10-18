@@ -1,17 +1,14 @@
 /**
  * GraphRAG: graph-retrieval augmented generation.
  *
- * Strategy (no external LLM required for hackathon):
- *   1. Extract keywords from the question.
- *   2. Run multiple focused Cypher queries against FalkorDB to collect evidence nodes.
- *   3. Traverse 1-hop neighbours for rich context.
- *   4. Format evidence as a structured answer with references.
+ * Retrieval is workspace-scoped and bounded: a small number of label lookups,
+ * relevance ranking, then capped relationship expansion.
  */
 
 import { graphRead } from "./falkordb";
 
 // ---------------------------------------------------------------------------
-// Keyword extraction — simple but effective for code-graph questions.
+// Keep identifiers intact while also matching their camel-case components.
 // ---------------------------------------------------------------------------
 
 const STOP_WORDS = new Set([
@@ -27,11 +24,14 @@ const STOP_WORDS = new Set([
 ]);
 
 function extractKeywords(question: string): string[] {
-  return question
-    .toLowerCase()
-    .split(/[\s,.:;?!()\[\]{}'"`]+/)
-    .filter((w) => w.length > 2 && !STOP_WORDS.has(w))
-    .slice(0, 8);
+  const terms = question.match(/[A-Za-z0-9_$./-]+/g) ?? [];
+  const expanded = terms.flatMap((term) => [
+    term.toLowerCase(),
+    ...term.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9_$]+/),
+  ]);
+  return [...new Set(expanded)]
+    .filter((term) => term.length > 2 && !STOP_WORDS.has(term))
+    .slice(0, 12);
 }
 
 // ---------------------------------------------------------------------------
@@ -48,43 +48,99 @@ const LABEL_PROPS: Record<string, string[]> = {
   Conflict:   ["id", "file", "baseBranch", "incomingBranch"],
   Test:       ["name", "status"],
   Repository: ["name"],
+  SlackMessage: ["text", "channel", "user"],
+  SlackChannel: ["name"],
+  Person: ["name", "email"],
 };
 
 // ---------------------------------------------------------------------------
 // Seed nodes: find nodes whose string props contain any keyword
 // ---------------------------------------------------------------------------
 
-async function findSeedNodes(workspaceId: string, keywords: string[]) {
-  if (keywords.length === 0) return [];
+type SeedNode = {
+  id: string;
+  label: string;
+  props: Record<string, unknown>;
+  score: number;
+  matchedTerms: string[];
+};
 
-  const results: Array<{ id: string; label: string; props: Record<string, unknown> }> = [];
-  const seen = new Set<string>();
-
-  for (const [label, props] of Object.entries(LABEL_PROPS)) {
-    for (const kw of keywords) {
-      for (const prop of props) {
-        const cypher = `
-          MATCH (n:${label})
-          WHERE toLower(toString(n.${prop})) CONTAINS $kw
-          RETURN id(n) AS id, labels(n)[0] AS label, properties(n) AS props
-          LIMIT 5
-        `;
-        try {
-          const rows = await graphRead(workspaceId, cypher, { kw });
-          for (const r of rows) {
-            const idStr = String(r.id);
-            if (!seen.has(idStr)) {
-              seen.add(idStr);
-              results.push({ id: idStr, label: String(r.label), props: (r.props ?? {}) as Record<string, unknown> });
-            }
-          }
-        } catch {
-          // silently skip unknown label
-        }
+function scoreSeed(props: Record<string, unknown>, fields: string[], keywords: string[]) {
+  const matched = new Set<string>();
+  let score = 0;
+  for (const keyword of keywords) {
+    for (const field of fields) {
+      const value = String(props[field] ?? "").toLowerCase();
+      if (value === keyword) {
+        score += 5;
+        matched.add(keyword);
+      } else if (value.includes(keyword)) {
+        score += keyword.length >= 5 ? 2 : 1;
+        matched.add(keyword);
       }
     }
   }
-  return results;
+  return { score, matchedTerms: [...matched] };
+}
+
+async function findSeedNodes(workspaceId: string, keywords: string[]): Promise<SeedNode[]> {
+  if (keywords.length === 0) return [];
+
+  const labels = Object.entries(LABEL_PROPS);
+  const candidates: SeedNode[] = [];
+  // Keep graph pressure predictable as the supported node catalog grows.
+  for (let offset = 0; offset < labels.length; offset += 3) {
+    const batch = labels.slice(offset, offset + 3);
+    const results = await Promise.all(batch.map(async ([label, fields]) => {
+      const params: Record<string, string> = {};
+      const predicates: string[] = [];
+      const scoreTerms: string[] = [];
+      for (const [fieldIndex, field] of fields.entries()) {
+        for (const [termIndex, keyword] of keywords.entries()) {
+          const key = `k${fieldIndex}_${termIndex}`;
+          params[key] = keyword;
+          const value = `toLower(toString(n.${field}))`;
+          predicates.push(`${value} CONTAINS $${key}`);
+          scoreTerms.push(`(CASE WHEN ${value} = $${key} THEN 5 WHEN ${value} CONTAINS $${key} THEN 2 ELSE 0 END)`);
+        }
+      }
+      try {
+        const rows = await graphRead(
+          workspaceId,
+          `MATCH (n:${label}) WHERE ${predicates.join(" OR ")}
+           RETURN id(n) AS id, labels(n)[0] AS label, properties(n) AS props,
+                  (${scoreTerms.join(" + ")}) AS retrievalScore
+           ORDER BY retrievalScore DESC
+           LIMIT 25`,
+          params,
+        );
+        return rows.map((row) => {
+          const props = (row.props ?? {}) as Record<string, unknown>;
+          const ranking = scoreSeed(props, fields, keywords);
+          return {
+            id: String(row.id),
+            label: String(row.label),
+            props,
+            score: ranking.score,
+            matchedTerms: ranking.matchedTerms,
+          };
+        });
+      } catch {
+        // A missing optional label/property should not fail retrieval for other labels.
+        return [];
+      }
+    }));
+    candidates.push(...results.flat());
+  }
+
+  const deduped = new Map<string, SeedNode>();
+  for (const candidate of candidates) {
+    const previous = deduped.get(candidate.id);
+    if (!previous || candidate.score > previous.score) deduped.set(candidate.id, candidate);
+  }
+  return [...deduped.values()]
+    .sort((a, b) => b.score - a.score || b.matchedTerms.length - a.matchedTerms.length)
+    .slice(0, 8);
 }
 
 // ---------------------------------------------------------------------------
@@ -102,19 +158,37 @@ async function expandNode(workspaceId: string, nodeId: string): Promise<Neighbou
   const outRows = await graphRead(
     workspaceId,
     `MATCH (n)-[r]->(nb) WHERE id(n) = $id
-     RETURN type(r) AS relType, labels(nb)[0] AS nbLabel, properties(nb) AS nbProps`,
-    { id: parseInt(nodeId, 10) as unknown as string },
+     RETURN type(r) AS relType, labels(nb)[0] AS nbLabel, properties(nb) AS nbProps
+     LIMIT 20`,
+    { id: Number(nodeId) },
   );
   const inRows = await graphRead(
     workspaceId,
     `MATCH (n)<-[r]-(nb) WHERE id(n) = $id
-     RETURN type(r) AS relType, labels(nb)[0] AS nbLabel, properties(nb) AS nbProps`,
-    { id: parseInt(nodeId, 10) as unknown as string },
+     RETURN type(r) AS relType, labels(nb)[0] AS nbLabel, properties(nb) AS nbProps
+     LIMIT 20`,
+    { id: Number(nodeId) },
   );
-  return [
+  const rows = [
     ...outRows.map((r) => ({ relType: String(r.relType), nbLabel: String(r.nbLabel), nbProps: (r.nbProps ?? {}) as Record<string, unknown>, direction: "out" as const })),
     ...inRows.map((r) => ({ relType: String(r.relType), nbLabel: String(r.nbLabel), nbProps: (r.nbProps ?? {}) as Record<string, unknown>, direction: "in" as const })),
   ];
+  const relationshipPriority: Record<string, number> = {
+    CALLS: 5,
+    TESTS: 5,
+    REFERENCES: 4,
+    MODIFIED: 4,
+    CONSTRAINS: 3,
+    HAS_CHUNK: 3,
+    NEXT: 0,
+  };
+  const priority = (type: string) => relationshipPriority[type] ?? 1;
+  const unique = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) {
+    const key = `${row.direction}:${row.relType}:${row.nbLabel}:${formatProps(row.nbProps)}`;
+    if (!unique.has(key)) unique.set(key, row);
+  }
+  return [...unique.values()].sort((a, b) => priority(b.relType) - priority(a.relType));
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +199,7 @@ function formatProps(props: Record<string, unknown>): string {
   const interesting = ["name", "key", "path", "sha", "message", "title", "text", "status", "author", "branch", "signature", "rationale", "channel"];
   return interesting
     .filter((k) => props[k] != null && String(props[k]).trim() !== "")
-    .map((k) => `${k}: ${String(props[k])}`)
+    .map((k) => `${k}: ${String(props[k]).slice(0, 500)}`)
     .join(" | ");
 }
 
@@ -157,7 +231,7 @@ export async function graphRagAnswer(workspaceId: string, question: string): Pro
 
   if (seeds.length === 0) {
     return {
-      answer: `No graph nodes matched keywords [${keywords.join(", ")}]. Try seeding the demo graph or pushing a repository commit to populate the graph.`,
+      answer: `No graph evidence matched [${keywords.join(", ")}]. Try a specific symbol, file path, issue key, commit, or discussion term.`,
       cypher: cypherLog,
       evidenceCount: 0,
     };
@@ -165,27 +239,44 @@ export async function graphRagAnswer(workspaceId: string, question: string): Pro
 
   // Step 2: expand each seed
   const lines: string[] = [`## Graph evidence for: "${question}"\n`];
+  const maxContextChars = 14_000;
+  let contextChars = lines[0]!.length;
+  let truncated = false;
+  const addEvidenceLine = (line: string) => {
+    if (contextChars + line.length + 1 > maxContextChars) return false;
+    lines.push(line);
+    contextChars += line.length + 1;
+    return true;
+  };
   let evidenceCount = 0;
 
-  for (const seed of seeds.slice(0, 6)) {
+  for (const seed of seeds) {
     const primary = formatProps(seed.props);
-    lines.push(`### [${seed.label}] ${primary || seed.id}`);
+    if (!addEvidenceLine(`### [${seed.label}] ${primary || seed.id} (relevance ${seed.score}; matched: ${seed.matchedTerms.join(", ")})`)) {
+      truncated = true;
+      break;
+    }
 
     const neighbours = await expandNode(workspaceId, seed.id);
     cypherLog.push(`// 1-hop expansion for ${seed.label}#${seed.id} → ${neighbours.length} neighbours`);
 
     if (neighbours.length === 0) {
-      lines.push("  _(no relationships found)_");
+      addEvidenceLine("  _(no relationships found)_");
     } else {
-      for (const nb of neighbours.slice(0, 8)) {
+      for (const nb of neighbours.slice(0, 6)) {
         const dir = nb.direction === "out" ? "→" : "←";
         const nbFmt = formatProps(nb.nbProps);
-        lines.push(`  ${dir} [${nb.relType}] [${nb.nbLabel}] ${nbFmt}`);
+        if (!addEvidenceLine(`  ${dir} [${nb.relType}] [${nb.nbLabel}] ${nbFmt}`)) {
+          truncated = true;
+          break;
+        }
         evidenceCount++;
       }
     }
-    lines.push("");
+    if (truncated) break;
+    addEvidenceLine("");
   }
+  if (truncated) lines.push("\n[Graph evidence truncated to fit the context budget.]");
 
   // Step 3: Cypher for conflicts if the question seems conflict-related
   if (/conflict|merge|branch|resolv/i.test(question)) {
@@ -196,11 +287,11 @@ RETURN c.id, c.file, f.name, collect(cm.message) AS commits, dec.title AS decisi
     try {
       const rows = await graphRead(workspaceId, conflictCypher);
       if (rows.length > 0) {
-        lines.push("### Conflict analysis from FalkorDB");
+        addEvidenceLine("### Conflict analysis from graph");
         for (const r of rows) {
-          lines.push(`- Conflict in **${r["c.file"]}** on function **${r["f.name"]}**`);
-          lines.push(`  Commits: ${(r["commits"] as string[]).join("; ")}`);
-          if (r["decision"]) lines.push(`  Decision: ${r["decision"]}`);
+          addEvidenceLine(`- Conflict in **${r["c.file"]}** on function **${r["f.name"]}**`);
+          addEvidenceLine(`  Commits: ${(r["commits"] as string[]).join("; ")}`);
+          if (r["decision"]) addEvidenceLine(`  Decision: ${r["decision"]}`);
         }
       }
     } catch {

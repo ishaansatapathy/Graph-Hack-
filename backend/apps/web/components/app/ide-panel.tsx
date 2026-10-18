@@ -1,501 +1,451 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "~/lib/trpc";
-import { useFingerprint } from "~/lib/fingerprint";
 
-type FileItem = {
-  path: string;
-  name: string;
-  language: string;
-  icon: string;
-  content: string;
-  symbol?: string;
-};
-
-const REPO_FILES: FileItem[] = [
-  {
-    path: "packages/services/src/auth/index.ts",
-    name: "auth/index.ts",
-    language: "typescript",
-    icon: "TS",
-    symbol: "verifyToken",
-    content: `import jwt from "jsonwebtoken";
-import { UserError } from "../errors";
-import { findUserById } from "../db";
-
-export interface SessionPayload {
-  userId: string;
-  email: string;
-  tokenVersion: string;
-}
-
-/**
- * Validates Google OAuth JWT session token against user's current tokenVersion.
- * Rejects stale sessions if token was bumped.
- */
-export async function verifyToken(token: string): Promise<SessionPayload> {
-  const secret = process.env.JWT_SECRET || "stackfox-secret";
-  try {
-    const decoded = jwt.verify(token, secret) as SessionPayload;
-    const user = await findUserById(decoded.userId);
-    if (!user) {
-      throw new UserError("User account no longer exists");
-    }
-    if (user.token_version !== decoded.tokenVersion) {
-      throw new UserError("Session revoked. Please sign in again.");
-    }
-    return decoded;
-  } catch (err) {
-    throw new UserError("Invalid or expired session token");
-  }
-}
-`,
-  },
-  {
-    path: "packages/services/src/conflict/detect.ts",
-    name: "conflict/detect.ts",
-    language: "typescript",
-    icon: "TS",
-    symbol: "detectConflicts",
-    content: `import { runReadOnlyCypher } from "../graph/engine";
-
-export interface ConflictRecord {
-  id: string;
-  file: string;
-  branchA: string;
-  commitShaA: string;
-  authorA: string;
-  messageA: string;
-  branchB: string;
-  commitShaB: string;
-  authorB: string;
-  messageB: string;
-  status: "open" | "resolved";
-}
-
-/**
- * Queries FalkorDB graph to detect when two distinct branches have modified
- * the exact same File node with unmerged commits.
- */
-export async function detectConflicts(workspaceId: string): Promise<ConflictRecord[]> {
-  const cypher = \`
-    MATCH (c1:Commit)-[:MODIFIES]->(f:File)<-[:MODIFIES]-(c2:Commit)
-    WHERE c1.sha < c2.sha AND c1.branch <> c2.branch
-    RETURN f.path AS file, c1.sha AS shaA, c1.branch AS branchA, c1.author AS authorA,
-           c2.sha AS shaB, c2.branch AS branchB, c2.author AS authorB
-    LIMIT 20
-  \`;
-  const result = await runReadOnlyCypher(workspaceId, cypher);
-  return result.rows.map((r: any, idx: number) => ({
-    id: \`conflict-\${idx + 1}\`,
-    file: r.file,
-    branchA: r.branchA,
-    commitShaA: r.shaA,
-    authorA: r.authorA,
-    messageA: "Refactored token verification",
-    branchB: r.branchB,
-    commitShaB: r.shaB,
-    authorB: r.authorB,
-    messageB: "Added session revocation checking",
-    status: "open",
-  }));
-}
-`,
-  },
-  {
-    path: "packages/services/src/graph/rag.ts",
-    name: "graph/rag.ts",
-    language: "typescript",
-    icon: "TS",
-    symbol: "graphRagAnswer",
-    content: `import { runReadOnlyCypher } from "./engine";
-import { complete } from "../ai/router";
-
-/**
- * Vectorless GraphRAG: Traverses structural graph relations in FalkorDB
- * to extract exact code, commit, issue, and test chunks.
- */
-export async function graphRagAnswer(opts: {
-  workspaceId: string;
-  question: string;
-  userId?: string;
-}) {
-  const cypherQueries = [
-    \`MATCH (f:Function)-[:CALLS]->(target:Function)
-      WHERE target.name CONTAINS "Token"
-      RETURN f.name AS caller, target.name AS callee\`,
-    \`MATCH (c:Commit)-[:REFERENCES]->(i:Issue)
-      RETURN c.sha AS sha, i.key AS issue, i.summary AS summary LIMIT 5\`
-  ];
-
-  const results = await Promise.all(
-    cypherQueries.map((q) => runReadOnlyCypher(opts.workspaceId, q).catch(() => ({ rows: [] })))
-  );
-
-  return {
-    cypher: cypherQueries,
-    evidenceCount: results.reduce((acc, curr) => acc + curr.rows.length, 0),
-    model: "gemini-2.5-flash",
-  };
-}
-`,
-  },
-  {
-    path: "tests/auth.test.ts",
-    name: "tests/auth.test.ts",
-    language: "typescript",
-    icon: "TS",
-    symbol: "runAuthTests",
-    content: `import { describe, it, expect } from "vitest";
-import { verifyToken } from "../packages/services/src/auth";
-
-describe("verifyToken", () => {
-  it("rejects token with mismatched token_version", async () => {
-    // verified: session revocation is enforced across all concurrent requests
-    expect(true).toBe(true);
-  });
-
-  it("decodes valid Google OAuth JWT payload", async () => {
-    expect(true).toBe(true);
-  });
-});
-`,
-  },
-  {
-    path: "package.json",
-    name: "package.json",
-    language: "json",
-    icon: "{}",
-    content: `{
-  "name": "stackfox-workspace",
-  "version": "0.1.0",
-  "private": true,
-  "engines": {
-    "node": ">=20.0.0"
-  },
-  "dependencies": {
-    "@neondatabase/serverless": "^1.2.0",
-    "drizzle-orm": "^0.45.4",
-    "falkordb": "^6.3.0"
-  }
-}
-`,
-  },
-];
+type RepoFile = { path: string; size: number };
+type OpenFile = { path: string; sha: string; branch: string; content: string };
+type FileListing = { branch: string; truncated: boolean; skippedLargeFiles: number; files: RepoFile[] };
+type BranchInfo = { name: string; protected: boolean };
+type SharedDraft = { content: string; version: number; updatedAt: string | null; updatedByUserId: string | null };
 
 export function IdePanel() {
-  const [activePath, setActivePath] = useState(REPO_FILES[0].path);
-  const [openTabs, setOpenTabs] = useState<string[]>([REPO_FILES[0].path, REPO_FILES[1].path]);
-  const [fileContents, setFileContents] = useState<Record<string, string>>(() =>
-    Object.fromEntries(REPO_FILES.map((f) => [f.path, f.content])),
-  );
-  const [saveToast, setSaveToast] = useState(false);
-  const [activeTabPanel, setActiveTabPanel] = useState<"graph" | "tests" | "conflicts">("graph");
-  const [graphQueryRunning, setGraphQueryRunning] = useState(false);
-  const [graphOutput, setGraphOutput] = useState<string | null>(null);
-  const [testOutput, setTestOutput] = useState<string | null>(null);
-  const [testsRunning, setTestsRunning] = useState(false);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [files, setFiles] = useState<RepoFile[]>([]);
+  const [branch, setBranch] = useState("");
+  const [defaultBranch, setDefaultBranch] = useState("");
+  const [editBranch, setEditBranch] = useState("");
+  const [branches, setBranches] = useState<BranchInfo[]>([]);
+  const [branchListTruncated, setBranchListTruncated] = useState(false);
+  const [pullRequestUrl, setPullRequestUrl] = useState("");
+  const [listingNotice, setListingNotice] = useState("");
+  const [activeFile, setActiveFile] = useState<OpenFile | null>(null);
+  const [content, setContent] = useState("");
+  const [baseContent, setBaseContent] = useState("");
+  const [draftVersion, setDraftVersion] = useState(0);
+  const [newerDraft, setNewerDraft] = useState<Pick<SharedDraft, "content" | "version"> | null>(null);
+  const [draftSyncStatus, setDraftSyncStatus] = useState("");
+  const [commitMessage, setCommitMessage] = useState("");
+  const [filter, setFilter] = useState("");
+  const [newPath, setNewPath] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [openingPullRequest, setOpeningPullRequest] = useState(false);
+  const [message, setMessage] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const draftVersionRef = useRef(0);
+  const dirtyRef = useRef(false);
+  const activeDraftPathRef = useRef("");
+  const draftSaveInFlightRef = useRef(false);
+  const sharedDraftContentRef = useRef("");
 
-  const fp = useFingerprint();
-  const activeFile = useMemo(
-    () => REPO_FILES.find((f) => f.path === activePath) ?? REPO_FILES[0],
-    [activePath],
-  );
+  const loadFiles = useCallback(async (id: string, selectedBranch: string) => {
+    const listing = await trpc.workspace.githubFiles.list.query({ workspaceId: id, branch: selectedBranch }) as FileListing;
+    setFiles(listing.files);
+    setBranch(listing.branch);
+    setListingNotice([
+      listing.truncated ? "Showing the first 2,000 files." : "",
+      listing.skippedLargeFiles ? `${listing.skippedLargeFiles} files over 1 MB are not editable here.` : "",
+    ].filter(Boolean).join(" "));
+    return listing;
+  }, []);
 
-  const currentContent = fileContents[activePath] ?? activeFile.content;
-
-  function handleSelectFile(path: string) {
-    if (!openTabs.includes(path)) {
-      setOpenTabs((prev) => [...prev, path]);
-    }
-    setActivePath(path);
-  }
-
-  function handleCloseTab(e: React.MouseEvent, path: string) {
-    e.stopPropagation();
-    const remaining = openTabs.filter((t) => t !== path);
-    if (remaining.length > 0) {
-      setOpenTabs(remaining);
-      if (activePath === path) {
-        setActivePath(remaining[remaining.length - 1]);
+  useEffect(() => {
+    let disposed = false;
+    void trpc.workspace.current.query({}).then(async (workspace) => {
+      if (disposed) return;
+      setWorkspaceId(workspace.id);
+      try {
+        const [edit, branchInfo] = await Promise.all([
+          trpc.workspace.githubFiles.editBranch.mutate({ workspaceId: workspace.id }),
+          trpc.workspace.githubFiles.branches.query({ workspaceId: workspace.id }),
+        ]);
+        setEditBranch(edit.branch);
+        setDefaultBranch(branchInfo.defaultBranch);
+        setBranches(branchInfo.branches as BranchInfo[]);
+        setBranchListTruncated(branchInfo.truncated);
+        await loadFiles(workspace.id, edit.branch);
+      } catch (error) {
+        setMessage({ tone: "error", text: error instanceof Error ? error.message : "Could not load GitHub repository" });
+      } finally {
+        if (!disposed) setLoading(false);
       }
+    }).catch((error) => {
+      if (!disposed) {
+        setMessage({ tone: "error", text: error instanceof Error ? error.message : "Could not load workspace" });
+        setLoading(false);
+      }
+    });
+    return () => { disposed = true; };
+  }, [loadFiles]);
+
+  const dirty = content !== baseContent;
+  dirtyRef.current = dirty;
+  activeDraftPathRef.current = activeFile?.path ?? "";
+  const visibleFiles = useMemo(() => {
+    const query = filter.trim().toLowerCase();
+    return query ? files.filter((file) => file.path.toLowerCase().includes(query)) : files;
+  }, [files, filter]);
+  const selectableBranches = useMemo(() => {
+    const all = [...branches];
+    for (const name of [defaultBranch, editBranch]) {
+      if (name && !all.some((item) => item.name === name)) all.push({ name, protected: false });
     }
-  }
+    return all;
+  }, [branches, defaultBranch, editBranch]);
 
-  function handleContentChange(val: string) {
-    setFileContents((prev) => ({ ...prev, [activePath]: val }));
-  }
-
-  function handleSave() {
-    setSaveToast(true);
-    setTimeout(() => setSaveToast(false), 2000);
-  }
-
-  async function handleRunGraphQuery() {
-    setGraphQueryRunning(true);
-    setGraphOutput(null);
+  async function openFile(path: string) {
+    if (!workspaceId) return;
+    if (dirty && !window.confirm("Discard your unsaved edits and open another file?")) return;
+    setMessage(null);
     try {
-      // Trace callers or connections of the current symbol
-      const symbol = activeFile.symbol ?? "verifyToken";
-      await new Promise((r) => setTimeout(r, 600));
-      setGraphOutput(`[FalkorDB Graph Traversal: ${symbol}]
-MATCH (n:Function {name: "${symbol}"})<-[:CALLS]-(caller:Function)
-RETURN caller.name AS function, caller.file AS sourceFile
-
-Found 3 callers in current workspace graph:
-  1. handleGoogleCallback (packages/services/src/auth/index.ts:L84)
-  2. requireAuthMiddleware (packages/trpc/server/trpc.ts:L42)
-  3. verifySessionRoute   (apps/api/src/routes/google-auth.ts:L29)
-
-Dependencies:
-  - jsonwebtoken (npm)
-  - database/users (PostgreSQL: Neon)
-  - token_version (PostgreSQL column constraint)`);
-    } finally {
-      setGraphQueryRunning(false);
+      const file = await trpc.workspace.githubFiles.read.query({ workspaceId, path, branch }) as OpenFile;
+      const draft = await trpc.workspace.fileDrafts.get.query({
+        workspaceId,
+        path,
+        baseContent: file.content,
+      }) as SharedDraft;
+      setActiveFile(file);
+      setContent(draft.content);
+      setBaseContent(file.content);
+      sharedDraftContentRef.current = draft.content;
+      draftVersionRef.current = draft.version;
+      setDraftVersion(draft.version);
+      setNewerDraft(null);
+      setDraftSyncStatus(draft.version ? `Shared draft v${draft.version}` : "No shared draft yet");
+      setCommitMessage(`Update ${path.split("/").pop()}`);
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "Could not open file" });
     }
   }
 
-  async function handleRunTests() {
-    setTestsRunning(true);
-    setTestOutput(null);
+  // Persist edits as workspace drafts and poll for teammates' saved versions.
+  useEffect(() => {
+    if (!workspaceId || !activeFile || branch !== editBranch || !dirty || content === sharedDraftContentRef.current) return;
+    const path = activeFile.path;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const saveDraft = () => {
+      if (draftSaveInFlightRef.current) {
+        retryTimer = setTimeout(saveDraft, 150);
+        return;
+      }
+      draftSaveInFlightRef.current = true;
+      void trpc.workspace.fileDrafts.save.mutate({
+        workspaceId,
+        path,
+        content,
+        expectedVersion: draftVersionRef.current,
+      }).then((saved) => {
+        if (activeDraftPathRef.current !== path) return;
+        if (saved.version < draftVersionRef.current) return;
+        draftVersionRef.current = saved.version;
+        sharedDraftContentRef.current = content;
+        setDraftVersion(saved.version);
+        setNewerDraft(null);
+        setDraftSyncStatus(`Shared draft v${saved.version} saved`);
+      }).catch(async (error) => {
+        if (activeDraftPathRef.current !== path) return;
+        setDraftSyncStatus("A teammate saved at the same time. Your edits are still local.");
+        try {
+          const latest = await trpc.workspace.fileDrafts.get.query({
+            workspaceId,
+            path,
+            baseContent: activeFile.content,
+          }) as SharedDraft;
+          if (activeDraftPathRef.current === path && latest.version > draftVersionRef.current) {
+            setNewerDraft({ content: latest.content, version: latest.version });
+          }
+        } catch {
+          // Keep the local buffer intact if the refresh also fails.
+        }
+        if (error instanceof Error) setMessage({ tone: "error", text: error.message });
+      }).finally(() => { draftSaveInFlightRef.current = false; });
+    };
+    const timer = setTimeout(saveDraft, 700);
+    return () => {
+      clearTimeout(timer);
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [workspaceId, activeFile, branch, editBranch, content, dirty]);
+
+  useEffect(() => {
+    if (!workspaceId || !activeFile || branch !== editBranch) return;
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const latest = await trpc.workspace.fileDrafts.get.query({
+          workspaceId,
+          path: activeFile.path,
+          baseContent: activeFile.content,
+        }) as SharedDraft;
+        if (disposed || latest.version <= draftVersionRef.current) return;
+        if (dirtyRef.current) {
+          setNewerDraft({ content: latest.content, version: latest.version });
+          return;
+        }
+        draftVersionRef.current = latest.version;
+        sharedDraftContentRef.current = latest.content;
+        setDraftVersion(latest.version);
+        setContent(latest.content);
+        setNewerDraft(null);
+        setDraftSyncStatus(`Loaded teammate draft v${latest.version}`);
+      } catch {
+        if (!disposed) setDraftSyncStatus("Shared draft sync is temporarily unavailable");
+      }
+    };
+    const timer = setInterval(() => void poll(), 2_500);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [workspaceId, activeFile, branch, editBranch]);
+
+  function loadNewerDraft() {
+    if (!newerDraft) return;
+    draftVersionRef.current = newerDraft.version;
+    sharedDraftContentRef.current = newerDraft.content;
+    setDraftVersion(newerDraft.version);
+    setContent(newerDraft.content);
+    setNewerDraft(null);
+    setDraftSyncStatus(`Loaded shared draft v${newerDraft.version}`);
+    setMessage(null);
+  }
+
+  async function changeBranch(nextBranch: string) {
+    if (!workspaceId || nextBranch === branch) return;
+    if (dirty && !window.confirm("Discard your unsaved edits and switch branches?")) return;
+    setActiveFile(null);
+    setContent("");
+    setBaseContent("");
+    setCommitMessage("");
+    setPullRequestUrl("");
+    setMessage(null);
     try {
-      await new Promise((r) => setTimeout(r, 800));
-      setTestOutput(`✓ tests/auth.test.ts (2 tests) 14ms
-  ✓ rejects token with mismatched token_version (6ms)
-  ✓ decodes valid Google OAuth JWT payload (4ms)
-
-✓ tests/graph.test.ts (4 tests) 28ms
-  ✓ connects to FalkorDB socket (12ms)
-  ✓ executes read-only Cypher query (8ms)
-  ✓ redacts sensitive tokens from memory (5ms)
-  ✓ sliding window prunes messages > 20 turns (3ms)
-
-Test Files  2 passed (2)
-Tests       6 passed (6)
-Duration    112ms
-Status      ALL CHECKS PASSING [Clean Exit 0]`);
-    } finally {
-      setTestsRunning(false);
+      await loadFiles(workspaceId, nextBranch);
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "Could not load branch" });
     }
   }
 
-  const lines = currentContent.split("\n");
+  function startNewFile() {
+    if (dirty && !window.confirm("Discard your unsaved edits and create a file?")) return;
+    setNewPath("");
+    setActiveFile(null);
+    setContent("");
+    setBaseContent("");
+    setCommitMessage("Add file");
+  }
+
+  async function saveFile() {
+    if (!workspaceId || !branch || branch !== editBranch || saving) return;
+    const path = activeFile?.path ?? newPath.trim();
+    if (!path) {
+      setMessage({ tone: "error", text: "Enter a repository path before saving" });
+      return;
+    }
+    setSaving(true);
+    setMessage(null);
+    try {
+      if (activeFile) {
+        if (draftSaveInFlightRef.current) throw new Error("Shared draft is still syncing. Try committing again in a moment.");
+        draftSaveInFlightRef.current = true;
+        try {
+          const latest = await trpc.workspace.fileDrafts.get.query({
+            workspaceId,
+            path,
+            baseContent: activeFile.content,
+          }) as SharedDraft;
+          sharedDraftContentRef.current = latest.content;
+          if (latest.version > draftVersionRef.current && latest.content !== content) {
+            setNewerDraft({ content: latest.content, version: latest.version });
+            throw new Error("A teammate has newer edits. Load their draft before committing.");
+          }
+          if (latest.version > draftVersionRef.current) {
+            draftVersionRef.current = latest.version;
+            setDraftVersion(latest.version);
+          }
+          if (latest.content !== content) {
+            const draft = await trpc.workspace.fileDrafts.save.mutate({
+              workspaceId,
+              path,
+              content,
+              expectedVersion: draftVersionRef.current,
+            });
+            draftVersionRef.current = draft.version;
+            sharedDraftContentRef.current = content;
+            setDraftVersion(draft.version);
+          }
+        } finally {
+          draftSaveInFlightRef.current = false;
+        }
+      }
+      const saved = await trpc.workspace.githubFiles.save.mutate({
+        workspaceId,
+        path,
+        branch,
+        content,
+        sha: activeFile?.sha ?? null,
+        message: commitMessage,
+      });
+      const nextFile: OpenFile = { path: saved.path, sha: saved.sha, branch: saved.branch, content };
+      setActiveFile(nextFile);
+      setBaseContent(content);
+      setNewPath("");
+      setMessage({ tone: "ok", text: `Committed to ${saved.branch}` });
+      await loadFiles(workspaceId, branch);
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "GitHub save failed" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createPullRequest() {
+    if (!workspaceId || branch !== editBranch || dirty) return;
+    setOpeningPullRequest(true);
+    setMessage(null);
+    try {
+      const result = await trpc.workspace.githubFiles.pullRequest.mutate({
+        workspaceId,
+        branch,
+        title: `Changes from ${branch}`,
+        body: "Created from Stackfox Studio. Review the file diff and run the required checks before merging.",
+      });
+      setPullRequestUrl(result.url);
+      setMessage({ tone: "ok", text: result.existing ? `Pull request #${result.number} already exists.` : `Pull request #${result.number} created.` });
+    } catch (error) {
+      setMessage({ tone: "error", text: error instanceof Error ? error.message : "Could not create pull request" });
+    } finally {
+      setOpeningPullRequest(false);
+    }
+  }
+
+  if (loading) return <p className="app-muted">Loading the shared GitHub repository…</p>;
 
   return (
-    <div className="ide-shell">
-      {/* ── IDE Top Toolbar ── */}
+    <div
+      className="ide-shell"
+      onKeyDown={(event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+          event.preventDefault();
+          void saveFile();
+        }
+      }}
+    >
       <div className="ide-topbar">
         <div className="ide-topbar-left">
           <span className="ide-logo">◈</span>
           <span className="ide-title">Stackfox Studio</span>
-          <span className="ide-badge">Live Monorepo</span>
+          <span className="ide-badge">GitHub workspace</span>
         </div>
-
         <div className="ide-topbar-actions">
-          <button
-            type="button"
-            className="app-btn-ghost app-btn-small"
-            onClick={handleSave}
-            title="Save changes"
-          >
-            💾 Save
+          <button type="button" className="app-btn-ghost app-btn-small" onClick={startNewFile} disabled={!workspaceId || branch !== editBranch}>New file</button>
+          <button type="button" className="app-btn-primary app-btn-small" onClick={() => void saveFile()} disabled={!dirty || branch !== editBranch || saving || (!activeFile && !newPath.trim())}>
+            {saving ? "Committing…" : dirty ? "Commit changes" : "Saved"}
           </button>
-          <button
-            type="button"
-            className={`app-btn-small ${activeTabPanel === "graph" ? "app-btn-primary" : "app-btn-ghost"}`}
-            onClick={() => setActiveTabPanel("graph")}
-          >
-            ◈ Graph Context
-          </button>
-          <button
-            type="button"
-            className={`app-btn-small ${activeTabPanel === "tests" ? "app-btn-primary" : "app-btn-ghost"}`}
-            onClick={() => setActiveTabPanel("tests")}
-          >
-            ✓ Run Tests
-          </button>
+          {branch === editBranch && branch !== defaultBranch ? (
+            <button type="button" className="app-btn-ghost app-btn-small" onClick={() => void createPullRequest()} disabled={saving || openingPullRequest || dirty}>
+              {openingPullRequest ? "Opening…" : dirty ? "Commit before PR" : "Open pull request"}
+            </button>
+          ) : null}
         </div>
       </div>
 
-      {/* ── IDE Workspace Grid (Sidebar + Editor + Context Inspector) ── */}
+      <p className="app-muted">Workspace drafts sync with teammates every 2.5 seconds. Commit when ready to save changes to your GitHub edit branch.</p>
+      {message ? <p className={`app-flash app-flash--${message.tone === "ok" ? "ok" : "err"}`} role="status">{message.text}</p> : null}
+
       <div className="ide-main-grid">
-        {/* ── Explorer File Tree ── */}
-        <div className="ide-explorer">
+        <aside className="ide-explorer">
           <div className="ide-explorer-header">
-            <span>EXPLORER</span>
-            <span className="ide-file-count">{REPO_FILES.length} files</span>
+            <span>REPOSITORY</span>
+            <span className="ide-file-count">{files.length}</span>
           </div>
-
-          <div className="ide-file-list">
-            <div className="ide-folder-label">📂 stackfox / src</div>
-            {REPO_FILES.map((f) => {
-              const active = f.path === activePath;
-              return (
-                <div
-                  key={f.path}
-                  className={`ide-file-item ${active ? "active" : ""}`}
-                  onClick={() => handleSelectFile(f.path)}
-                >
-                  <span className="ide-file-icon">{f.icon}</span>
-                  <span className="ide-file-name">{f.name}</span>
-                </div>
-              );
-            })}
-          </div>
-
           <div className="ide-explorer-footer">
-            <div className="ide-graph-status">
-              <span className="status-indicator-green" /> FalkorDB Connected
-            </div>
-          </div>
-        </div>
-
-        {/* ── Center Code Editor ── */}
-        <div className="ide-editor-container">
-          {/* File Tabs */}
-          <div className="ide-tabs-bar">
-            {openTabs.map((path) => {
-              const item = REPO_FILES.find((f) => f.path === path);
-              const active = path === activePath;
-              return (
-                <div
-                  key={path}
-                  className={`ide-tab ${active ? "active" : ""}`}
-                  onClick={() => setActivePath(path)}
-                >
-                  <span className="ide-tab-icon">{item?.icon ?? "📄"}</span>
-                  <span className="ide-tab-title">{item?.name ?? path}</span>
-                  {openTabs.length > 1 ? (
-                    <button
-                      type="button"
-                      className="ide-tab-close"
-                      onClick={(e) => handleCloseTab(e, path)}
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Code Area with Line Numbers */}
-          <div className="ide-code-area">
-            <div className="ide-line-numbers">
-              {lines.map((_, i) => (
-                <span key={i + 1}>{i + 1}</span>
+            <label className="app-muted" htmlFor="ide-branch-select">Branch</label>
+            <select id="ide-branch-select" className="app-input app-input-block" value={branch} onChange={(event) => void changeBranch(event.target.value)}>
+              {selectableBranches.map((item) => (
+                <option key={item.name} value={item.name}>{item.name}{item.name === defaultBranch ? " (default)" : item.protected ? " (protected)" : ""}</option>
               ))}
-            </div>
+            </select>
+            {branch === editBranch ? <span className="app-muted">Your editable branch</span> : <span className="app-muted">Read-only branch preview</span>}
+          </div>
+          {branchListTruncated ? <p className="app-muted">Showing only the first 100 GitHub branches.</p> : null}
+          <input
+            className="app-input app-input-block"
+            aria-label="Filter repository files"
+            placeholder="Find a file…"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+          />
+          <div className="ide-file-list">
+            {listingNotice ? <p className="app-muted">{listingNotice}</p> : null}
+            {visibleFiles.map((file) => (
+              <button
+                key={file.path}
+                type="button"
+                className={`ide-file-item ${activeFile?.path === file.path ? "active" : ""}`}
+                onClick={() => void openFile(file.path)}
+                title={`${file.path} (${file.size} bytes)`}
+              >
+                <span className="ide-file-icon">{file.path.split(".").pop()?.slice(0, 3).toUpperCase() ?? "FILE"}</span>
+                <span className="ide-file-name">{file.path}</span>
+              </button>
+            ))}
+            {visibleFiles.length === 0 ? <p className="app-muted">No repository files match.</p> : null}
+          </div>
+          <div className="ide-explorer-footer">
+            <span className="status-indicator-green" /> GitHub connected
+          </div>
+        </aside>
 
+        <section className="ide-editor-container">
+          <div className="ide-tabs-bar">
+            <div className="ide-tab active">
+              <span className="ide-tab-icon">{activeFile ? "TS" : "＋"}</span>
+              <span className="ide-tab-title">{activeFile?.path ?? (newPath || "No file selected")}</span>
+              {dirty ? <span aria-label="Unsaved changes"> ●</span> : null}
+            </div>
+          </div>
+          {!activeFile && !commitMessage ? (
+            <div className="app-empty-state">Choose a file from the repository or create a new one.</div>
+          ) : null}
+          {!activeFile && commitMessage ? (
+            <input
+              className="app-input app-input-block"
+              placeholder="Path, e.g. src/api/handler.ts"
+              value={newPath}
+              onChange={(event) => setNewPath(event.target.value)}
+            />
+          ) : null}
+          <div className="ide-code-area">
+            <div className="ide-line-numbers" aria-hidden="true">
+              {content.split("\n").map((_, index) => <span key={index}>{index + 1}</span>)}
+            </div>
             <textarea
               className="ide-textarea"
-              value={currentContent}
-              onChange={(e) => handleContentChange(e.target.value)}
+              aria-label={activeFile ? `Edit ${activeFile.path}` : "New file content"}
+              value={content}
+              onChange={(event) => setContent(event.target.value)}
               spellCheck={false}
               autoCapitalize="off"
               autoComplete="off"
+              disabled={(!activeFile && !commitMessage) || branch !== editBranch}
             />
           </div>
-
-          {/* Editor Status Bar */}
           <div className="ide-statusbar">
             <div className="ide-statusbar-left">
-              <span>{activeFile.language.toUpperCase()}</span>
-              <span>·</span>
-              <span>UTF-8</span>
-              <span>·</span>
-              <span>{lines.length} lines</span>
-              <span>·</span>
-              <span>{currentContent.length} chars</span>
+              <span>{draftSyncStatus || `Draft v${draftVersion}`}</span>
+              {newerDraft ? <button type="button" className="app-btn-ghost app-btn-small" onClick={loadNewerDraft}>Load teammate draft v{newerDraft.version}</button> : null}
+              <span>{content.split("\n").length} lines</span><span>·</span><span>{new TextEncoder().encode(content).length} bytes</span>
             </div>
-
             <div className="ide-statusbar-right">
-              {saveToast ? <span className="ide-toast-saved">✓ Saved to workspace</span> : null}
-              <span>Branch: <code>main</code></span>
+              <input
+                className="app-input"
+                aria-label="Git commit message"
+                value={commitMessage}
+                onChange={(event) => setCommitMessage(event.target.value)}
+                placeholder="Commit message"
+              />
             </div>
           </div>
-        </div>
-
-        {/* ── Right Inspector Panel: Graph Intelligence & Tests ── */}
-        <aside className="ide-inspector">
-          <div className="ide-inspector-tabs">
-            <button
-              type="button"
-              className={`inspector-tab ${activeTabPanel === "graph" ? "active" : ""}`}
-              onClick={() => setActiveTabPanel("graph")}
-            >
-              ◈ Graph Context
-            </button>
-            <button
-              type="button"
-              className={`inspector-tab ${activeTabPanel === "tests" ? "active" : ""}`}
-              onClick={() => setActiveTabPanel("tests")}
-            >
-              ✓ Verification
-            </button>
-          </div>
-
-          <div className="ide-inspector-body">
-            {activeTabPanel === "graph" ? (
-              <div className="inspector-graph-view">
-                <div className="inspector-section-title">ACTIVE SYMBOL CONTEXT</div>
-                <div className="symbol-card">
-                  <div className="symbol-badge">Function</div>
-                  <strong>{activeFile.symbol ?? "Symbol"}</strong>
-                  <p className="app-muted" style={{ fontSize: "0.75rem", margin: "4px 0 0" }}>
-                    Defined in <code>{activeFile.name}</code>
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  className="app-btn-primary app-btn-small"
-                  style={{ width: "100%", marginTop: "10px" }}
-                  onClick={() => void handleRunGraphQuery()}
-                  disabled={graphQueryRunning}
-                >
-                  {graphQueryRunning ? "Traversing FalkorDB…" : "⚡ Trace Callers & Dependencies"}
-                </button>
-
-                {graphOutput ? (
-                  <div className="inspector-output-box">
-                    <pre>{graphOutput}</pre>
-                  </div>
-                ) : (
-                  <p className="app-muted" style={{ fontSize: "0.8rem", marginTop: "12px" }}>
-                    Click above to query FalkorDB using Cypher. Stackfox will retrieve all functions
-                    calling this symbol and linked test coverage.
-                  </p>
-                )}
-              </div>
-            ) : (
-              <div className="inspector-tests-view">
-                <div className="inspector-section-title">TEST VERIFICATION SUITE</div>
-                <p className="app-muted" style={{ fontSize: "0.75rem", marginBottom: "8px" }}>
-                  Run sandboxed tests against your current code and graph resolution candidates.
-                </p>
-
-                <button
-                  type="button"
-                  className="app-btn-primary app-btn-small"
-                  style={{ width: "100%" }}
-                  onClick={() => void handleRunTests()}
-                  disabled={testsRunning}
-                >
-                  {testsRunning ? "Running tests in isolated container…" : "▶ Run All Workspace Tests"}
-                </button>
-
-                {testOutput ? (
-                  <div className="inspector-output-box test-output">
-                    <pre>{testOutput}</pre>
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-        </aside>
+          {pullRequestUrl ? <p className="app-flash app-flash--ok"><a href={pullRequestUrl} target="_blank" rel="noopener noreferrer">Open pull request on GitHub</a></p> : null}
+        </section>
       </div>
     </div>
   );

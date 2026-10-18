@@ -1,8 +1,9 @@
-import { githubWebhookUrl } from "../integrations/config";
+import { githubWebhookUrl, normalizeJiraCloudBaseUrl, normalizeSlackWebhookUrl } from "../integrations/config";
 import type { IntegrationProvider } from "./db";
 import * as workspaceDb from "./db";
 import { registerGithubRepositoryWebhook } from "./github-webhook-register";
 import { decryptJson, encryptJson, maskSecret } from "./secrets";
+import { UserError } from "../errors";
 
 export type IntegrationSummary = {
   provider: IntegrationProvider;
@@ -38,6 +39,7 @@ export async function listIntegrationSummaries(workspaceId: string): Promise<Int
       masked.email = config.email ? `${config.email.slice(0, 2)}•••` : null;
       masked.apiToken = maskSecret(config.apiToken);
       masked.baseUrl = config.baseUrl ?? null;
+      masked.autoTransitionOnCommit = config.autoTransitionOnCommit === "true" ? "true" : "false";
     }
     if (provider === "slack") {
       masked.webhookUrl = config.webhookUrl ? "https://hooks.slack.com/•••" : null;
@@ -96,22 +98,48 @@ export async function upsertGithub(
 
 export async function upsertJira(
   workspaceId: string,
-  input: { baseUrl: string; email: string; apiToken: string },
+  input: { baseUrl: string; email: string; apiToken: string; autoTransitionOnCommit?: boolean },
 ): Promise<void> {
-  const baseUrl = input.baseUrl.trim().replace(/\/+$/, "");
+  const baseUrl = normalizeJiraCloudBaseUrl(input.baseUrl);
   const email = input.email.trim();
   const apiToken = input.apiToken.trim();
   if (!baseUrl || !email || !apiToken) throw new Error("Jira site URL, email, and API token are required");
-  await workspaceDb.upsertIntegration(workspaceId, "jira", encryptJson({ baseUrl, email, apiToken }));
+  const existing = (await readConfig(workspaceId, "jira")) ?? {};
+  await workspaceDb.upsertIntegration(
+    workspaceId,
+    "jira",
+    encryptJson({
+      ...existing,
+      baseUrl,
+      email,
+      apiToken,
+      ...(input.autoTransitionOnCommit !== undefined
+        ? { autoTransitionOnCommit: String(input.autoTransitionOnCommit) }
+        : {}),
+    }),
+  );
+}
+
+export async function setJiraCommitAutomation(workspaceId: string, enabled: boolean): Promise<void> {
+  const existing = await readConfig(workspaceId, "jira");
+  if (!existing?.baseUrl || !existing.email || !existing.apiToken) {
+    throw new Error("Connect Jira before configuring commit automation");
+  }
+  await workspaceDb.upsertIntegration(
+    workspaceId,
+    "jira",
+    encryptJson({ ...existing, autoTransitionOnCommit: String(enabled) }),
+  );
 }
 
 export async function upsertSlack(
   workspaceId: string,
   input: { webhookUrl: string; botToken?: string; teamDomain?: string },
 ): Promise<void> {
-  const webhookUrl = input.webhookUrl.trim();
-  if (!webhookUrl.startsWith("https://hooks.slack.com/")) {
-    throw new Error("Use a valid Slack incoming webhook URL");
+  const webhookUrl = normalizeSlackWebhookUrl(input.webhookUrl);
+  const teamDomain = input.teamDomain?.trim().toLowerCase();
+  if (teamDomain && !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(teamDomain)) {
+    throw new UserError("Slack team domain must be a workspace slug, such as your-team");
   }
   const existing = (await readConfig(workspaceId, "slack")) ?? {};
   await workspaceDb.upsertIntegration(
@@ -121,7 +149,7 @@ export async function upsertSlack(
       ...existing,
       webhookUrl,
       ...(input.botToken?.trim() ? { botToken: input.botToken.trim() } : {}),
-      ...(input.teamDomain?.trim() ? { teamDomain: input.teamDomain.trim() } : {}),
+      ...(teamDomain ? { teamDomain } : {}),
     }),
   );
 }
@@ -151,9 +179,15 @@ export async function testJira(workspaceId: string) {
   const config = await readConfig(workspaceId, "jira");
   if (!config?.baseUrl || !config.email || !config.apiToken) return { ok: false as const, message: "Jira is not connected" };
 
+  let baseUrl: string;
+  try {
+    baseUrl = normalizeJiraCloudBaseUrl(config.baseUrl);
+  } catch (error) {
+    return { ok: false as const, message: error instanceof Error ? error.message : "Invalid Jira URL" };
+  }
   const basic = Buffer.from(`${config.email}:${config.apiToken}`).toString("base64");
   try {
-    const response = await fetch(`${config.baseUrl}/rest/api/3/myself`, {
+    const response = await fetch(`${baseUrl}/rest/api/3/myself`, {
       headers: { Authorization: `Basic ${basic}`, Accept: "application/json" },
     });
     if (!response.ok) return { ok: false as const, message: `Jira returned ${response.status}` };
@@ -170,7 +204,7 @@ export async function testSlack(workspaceId: string) {
   if (!webhookUrl) return { ok: false as const, message: "Slack is not connected — paste an incoming webhook URL" };
 
   try {
-    const response = await fetch(webhookUrl, {
+    const response = await fetch(normalizeSlackWebhookUrl(webhookUrl), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: ":white_check_mark: Stackfox is connected — graph progress updates can post here." }),

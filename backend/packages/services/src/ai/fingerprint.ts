@@ -1,8 +1,9 @@
 /**
- * Device-level rate limiting via browser fingerprint — Neon/PostgreSQL.
+ * Device and account rate limiting via Neon/PostgreSQL.
  *
  * Problem: users create multiple Google accounts to bypass per-user AI quotas.
- * Solution: track AI usage by device fingerprint in Postgres (persistent across restarts).
+ * Browser fingerprints are client-controlled, so each request also reserves a
+ * server-derived authenticated-account quota in Postgres.
  *
  * The raw fingerprint is NEVER stored — only a salted HMAC-SHA256 hash.
  */
@@ -12,14 +13,14 @@ import crypto from "node:crypto";
 import {
   cleanupOldDeviceQuotas,
   getDeviceWindowCount,
-  incrementDeviceWindow,
+  reserveDeviceQuota,
 } from "../db/index";
 
 const DEVICE_RPM = 15;   // requests per minute per device
 const DEVICE_RPD = 150;  // requests per day per device
 
 function getFpSalt(): string {
-  return process.env.FP_SALT ?? "stackfox-fp-v1";
+  return process.env.FP_SALT?.trim() || "stackfox-fp-v1";
 }
 
 function hashFingerprint(rawFp: string): string {
@@ -44,44 +45,39 @@ export type FpRateResult =
  * Check + increment device quota (async, Neon-backed).
  * Call before every AI request.
  */
-export async function checkDeviceQuota(rawFp: string | null | undefined): Promise<FpRateResult> {
-  if (!rawFp || rawFp.trim().length < 8) {
-    return { ok: true, fpHash: "no-fp" };
-  }
-
-  const fpHash = hashFingerprint(rawFp);
+export async function checkDeviceQuota(
+  rawFp: string | null | undefined,
+  authenticatedUserId: string,
+): Promise<FpRateResult> {
+  const accountHash = hashFingerprint(`account:${authenticatedUserId}`);
+  const normalizedFingerprint = rawFp?.trim();
+  const deviceHash = normalizedFingerprint && normalizedFingerprint.length >= 8
+    ? hashFingerprint(`device:${normalizedFingerprint}`)
+    : accountHash;
   const now = Date.now();
 
-  // Per-minute check
   const minKey = minuteWindow();
-  const minCount = await getDeviceWindowCount(fpHash, minKey);
-  if (minCount >= DEVICE_RPM) {
-    return { ok: false, reason: "device_rpm", retryAfterMs: 60_000 - (now % 60_000) };
-  }
-
-  // Per-day check
   const dayKey = dayWindow();
-  const dayCount = await getDeviceWindowCount(fpHash, dayKey);
-  if (dayCount >= DEVICE_RPD) {
-    return { ok: false, reason: "device_rpd", retryAfterMs: 86_400_000 - (now % 86_400_000) };
+  for (const fpHash of new Set([deviceHash, accountHash])) {
+    const reservation = await reserveDeviceQuota(fpHash, minKey, dayKey, DEVICE_RPM, DEVICE_RPD);
+    if (reservation === "device_rpm") {
+      return { ok: false, reason: "device_rpm", retryAfterMs: 60_000 - (now % 60_000) };
+    }
+    if (reservation === "device_rpd") {
+      return { ok: false, reason: "device_rpd", retryAfterMs: 86_400_000 - (now % 86_400_000) };
+    }
   }
-
-  // Increment both windows
-  await Promise.all([
-    incrementDeviceWindow(fpHash, minKey),
-    incrementDeviceWindow(fpHash, dayKey),
-  ]);
 
   // 1% chance cleanup
   if (Math.random() < 0.01) {
     void cleanupOldDeviceQuotas();
   }
 
-  return { ok: true, fpHash };
+  return { ok: true, fpHash: deviceHash };
 }
 
 export async function getDeviceUsage(rawFp: string): Promise<{ minuteUsed: number; dayUsed: number }> {
-  const fpHash = hashFingerprint(rawFp);
+  const fpHash = hashFingerprint(`device:${rawFp.trim()}`);
   const [minuteUsed, dayUsed] = await Promise.all([
     getDeviceWindowCount(fpHash, minuteWindow()),
     getDeviceWindowCount(fpHash, dayWindow()),

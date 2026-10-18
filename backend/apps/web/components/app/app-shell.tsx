@@ -10,11 +10,12 @@ type Props = {
   activeId: AppFeatureId;
   userName: string;
   userEmail: string;
+  systemStatus: { database: boolean; graph: boolean } | null;
   onLogout: () => void;
   children: ReactNode;
 };
 
-export function AppShell({ activeId, userName, userEmail, onLogout, children }: Props) {
+export function AppShell({ activeId, userName, userEmail, systemStatus, onLogout, children }: Props) {
   const pathname = usePathname();
   const feature = APP_FEATURES.find((f) => f.id === activeId) ?? APP_FEATURES[0];
 
@@ -126,13 +127,13 @@ export function AppShell({ activeId, userName, userEmail, onLogout, children }: 
           </div>
 
           <div className="header-status-strip">
-            <div className="status-pill status-pill--healthy">
+            <div className={`status-pill ${systemStatus?.database ? "status-pill--healthy" : "status-pill--unavailable"}`}>
               <span className="pulse-dot" />
-              <span>Neon PostgreSQL: Online</span>
+              <span>PostgreSQL: {systemStatus ? (systemStatus.database ? "Online" : "Unavailable") : "Checking"}</span>
             </div>
-            <div className="status-pill status-pill--graph">
+            <div className={`status-pill ${systemStatus?.graph ? "status-pill--graph" : "status-pill--unavailable"}`}>
               <span className="graph-dot" />
-              <span>FalkorDB Graph Layer: Active</span>
+              <span>FalkorDB: {systemStatus ? (systemStatus.graph ? "Online" : "Unavailable") : "Checking"}</span>
             </div>
           </div>
         </header>

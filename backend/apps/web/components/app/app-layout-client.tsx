@@ -22,6 +22,7 @@ export function AppLayoutClient({ children }: { children: ReactNode }) {
 
   const [me, setMe] = useState<{ fullName: string; email: string } | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [systemStatus, setSystemStatus] = useState<{ database: boolean; graph: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -43,6 +44,25 @@ export function AppLayoutClient({ children }: { children: ReactNode }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    let active = true;
+    const refreshStatus = async () => {
+      try {
+        const status = await trpc.graph.status.query({ workspaceId: workspace.id });
+        if (active) setSystemStatus(status);
+      } catch {
+        if (active) setSystemStatus(null);
+      }
+    };
+    void refreshStatus();
+    const interval = window.setInterval(() => void refreshStatus(), 30_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [workspace]);
 
   async function onLogout() {
     await trpc.auth.logout.mutate({});
@@ -75,6 +95,7 @@ export function AppLayoutClient({ children }: { children: ReactNode }) {
       activeId={feature.id}
       userName={me.fullName}
       userEmail={me.email}
+      systemStatus={systemStatus}
       onLogout={() => void onLogout()}
     >
       {children}

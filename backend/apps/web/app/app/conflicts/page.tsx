@@ -16,7 +16,11 @@ type Conflict = {
   commitShaB: string;
   messageB: string;
   branchB: string;
-  status: "open" | "resolved";
+  status: "open";
+  evidence?: "overlapping_hunks" | "diff_unavailable";
+  overlappingLines?: string[];
+  patchA?: string;
+  patchB?: string;
 };
 
 type Resolution = {
@@ -33,7 +37,6 @@ export default function ConflictsPage() {
   const [resolving, setResolving] = useState<string | null>(null);
   const [resolutions, setResolutions] = useState<Map<string, Resolution>>(new Map());
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
   const fp = useFingerprint();
 
   useEffect(() => {
@@ -44,7 +47,7 @@ export default function ConflictsPage() {
     if (!workspaceId) return;
     setLoading(true);
     try {
-      const list = await trpc.graph.conflicts.list.query({ workspaceId });
+      const list = await trpc.graph.conflicts.scan.query({ workspaceId });
       setConflicts((list ?? []) as Conflict[]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load conflicts from graph engine");
@@ -56,20 +59,6 @@ export default function ConflictsPage() {
   useEffect(() => {
     void loadConflicts();
   }, [loadConflicts]);
-
-  async function simulateConflict() {
-    if (!workspaceId) return;
-    setBusy(true);
-    setError("");
-    try {
-      await trpc.graph.seedDemo.mutate({ workspaceId });
-      await loadConflicts();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Simulation failed");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function resolveConflict(c: Conflict) {
     if (!workspaceId) return;
@@ -88,6 +77,10 @@ export default function ConflictsPage() {
         commitShaB: c.commitShaB,
         messageB: c.messageB,
         branchB: c.branchB,
+        evidence: c.evidence,
+        overlappingLines: c.overlappingLines,
+        patchA: c.patchA,
+        patchB: c.patchB,
         fp: fp ?? undefined,
       });
       setResolutions((prev) => {
@@ -100,10 +93,6 @@ export default function ConflictsPage() {
         });
         return next;
       });
-      // Mark as resolved in local state
-      setConflicts((prev) =>
-        prev.map((x) => (x.id === c.id ? { ...x, status: "resolved" as const } : x)),
-      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Resolution failed");
     } finally {
@@ -112,7 +101,6 @@ export default function ConflictsPage() {
   }
 
   const openConflicts = conflicts.filter((c) => c.status === "open");
-  const resolvedConflicts = conflicts.filter((c) => c.status === "resolved");
 
   if (!workspaceId) return <p className="app-muted">Loading workspace context…</p>;
 
@@ -122,55 +110,47 @@ export default function ConflictsPage() {
         <div>
           <h2 className="app-conflicts-title">
             <span className="app-conflict-icon">⚡</span>
-            Graph Conflict Detector & AI Auto-Resolver
+            Branch Change Review
           </h2>
           <p className="app-muted">
-            FalkorDB traces git branches, AST functions, and PR changes across your team to detect
-            code collisions before merge. AI synthesizes a clean unified resolution with graph rationale.
+            The graph flags files changed on more than one branch. That is a review candidate, not proof of overlapping lines or a Git merge conflict. AI suggestions use commit metadata and need review against the actual diff.
           </p>
         </div>
         <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
           <button
             type="button"
             className="app-btn-ghost app-btn-small"
-            disabled={busy || loading}
+            disabled={loading}
             onClick={() => void loadConflicts()}
           >
             ↻ Scan Graph
           </button>
-          <button
-            type="button"
-            className="app-btn app-btn-small"
-            disabled={busy || loading}
-            onClick={() => void simulateConflict()}
-          >
-            {busy ? "Seeding…" : "⚡ Simulate Branch Collision"}
-          </button>
+
         </div>
       </div>
 
       {/* KPI Stats Row */}
       <div className="usage-stat-grid" style={{ marginBottom: "20px" }}>
         <div className="stat-card">
-          <span className="stat-label">OPEN CONFLICTS</span>
+          <span className="stat-label">POTENTIAL OVERLAPS</span>
           <span className="stat-value" style={{ color: openConflicts.length > 0 ? "var(--accent-red, #f87171)" : "inherit" }}>
             {openConflicts.length}
           </span>
-          <span className="stat-sub">Requiring team or AI merge</span>
+          <span className="stat-sub">Possible same-file branch edits</span>
         </div>
         <div className="stat-card">
-          <span className="stat-label">RESOLVED IN GRAPH</span>
+          <span className="stat-label">AI SUGGESTIONS</span>
           <span className="stat-value" style={{ color: "var(--accent-green, #34d399)" }}>
-            {resolvedConflicts.length}
+            {resolutions.size}
           </span>
-          <span className="stat-sub">Evidence-backed AI resolutions</span>
+          <span className="stat-sub">Generated this session; review required</span>
         </div>
         <div className="stat-card">
-          <span className="stat-label">GRAPH ENGINE STATUS</span>
+          <span className="stat-label">EVIDENCE AVAILABLE</span>
           <span className="stat-value" style={{ fontSize: "1.2rem", color: "#60a5fa" }}>
-            Live High Availability
+            {conflicts.some((c) => c.evidence === "overlapping_hunks") ? "Diff hunks" : "Scan required"}
           </span>
-          <span className="stat-sub">AST & Git branch traversal active</span>
+          <span className="stat-sub">Check actual diffs before merging.</span>
         </div>
       </div>
 
@@ -181,28 +161,21 @@ export default function ConflictsPage() {
           <div className="app-spinner" />
           <p className="app-muted">Traversing code graph & branch commits…</p>
         </div>
-      ) : openConflicts.length === 0 && resolvedConflicts.length === 0 ? (
+      ) : openConflicts.length === 0 ? (
         <div className="app-conflicts-empty">
           <span className="app-conflicts-empty-icon">✓</span>
-          <p style={{ fontSize: "1.1rem", fontWeight: 600 }}>No branch collisions currently detected in the graph.</p>
+          <p style={{ fontSize: "1.1rem", fontWeight: 600 }}>No same-file branch changes found in the current graph.</p>
           <p className="app-muted">
-            All branches are clean, or click below to simulate a high-severity branch conflict between team members.
+            No overlapping diff hunks were confirmed. GitHub compare evidence may also be unavailable.
           </p>
-          <button
-            type="button"
-            className="app-btn"
-            style={{ marginTop: "16px" }}
-            onClick={() => void simulateConflict()}
-          >
-            ⚡ Simulate Enterprise Collision Scenario
-          </button>
+
         </div>
       ) : null}
 
       {openConflicts.length > 0 ? (
         <div className="app-conflicts-section">
           <h3 className="app-section-title">
-            Open Branch Collisions
+            Potential Branch Overlaps
             <span className="app-badge app-badge--err">{openConflicts.length}</span>
           </h3>
           <div className="app-conflicts-list">
@@ -219,25 +192,6 @@ export default function ConflictsPage() {
         </div>
       ) : null}
 
-      {resolvedConflicts.length > 0 ? (
-        <div className="app-conflicts-section">
-          <h3 className="app-section-title">
-            Resolved Conflicts
-            <span className="app-badge app-badge--ok">{resolvedConflicts.length}</span>
-          </h3>
-          <div className="app-conflicts-list">
-            {resolvedConflicts.map((c) => (
-              <ConflictCard
-                key={c.id}
-                conflict={c}
-                resolution={resolutions.get(c.id)}
-                resolving={false}
-                onResolve={() => void resolveConflict(c)}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
     </section>
   );
 }
@@ -256,16 +210,12 @@ function ConflictCard({
   const [expanded, setExpanded] = useState(true);
 
   return (
-    <article
-      className={`app-conflict-card ${c.status === "resolved" ? "app-conflict-card--resolved" : ""}`}
-    >
+    <article className="app-conflict-card">
       <div className="app-conflict-card-head">
         <div className="app-conflict-file">
           <span className="conflict-tag-icon">⚡</span>
           <code>{c.file}</code>
-          <span className={`app-pill ${c.status === "resolved" ? "app-pill--on" : "app-pill--err"}`}>
-            {c.status === "resolved" ? "RESOLVED" : "COLLISION DETECTED"}
-          </span>
+          <span className="app-pill app-pill--err">POSSIBLE OVERLAP</span>
         </div>
         <div className="app-conflict-actions">
           <button
@@ -284,10 +234,10 @@ function ConflictCard({
             >
               {resolving ? (
                 <>
-                  <span className="app-spinner-sm" /> Resolving with GraphRAG…
+                  <span className="app-spinner-sm" /> Generating suggestion…
                 </>
               ) : (
-                "✨ Resolve with AI"
+                "Generate AI suggestion"
               )}
             </button>
           ) : null}
@@ -316,13 +266,23 @@ function ConflictCard({
         </div>
       ) : null}
 
+      {expanded ? (
+        <div>
+          <p className="app-muted">{c.evidence === "overlapping_hunks"
+            ? `Potentially overlapping base ranges: ${(c.overlappingLines ?? []).join(", ")}`
+            : "GitHub diff evidence unavailable; this item was not confirmed as a line conflict."}</p>
+          {c.patchA ? <><strong>Branch A diff excerpt</strong><pre className="app-cypher">{c.patchA}</pre></> : null}
+          {c.patchB ? <><strong>Branch B diff excerpt</strong><pre className="app-cypher">{c.patchB}</pre></> : null}
+        </div>
+      ) : null}
+
       {resolution ? (
         <div className="app-conflict-resolution">
           <div className="app-conflict-resolution-header">
-            <span className="app-pill app-pill--on">AI Unified Resolution</span>
+            <span className="app-pill app-pill--on">AI suggestion · review required</span>
             <span className="app-muted" style={{ fontSize: "0.75rem" }}>
               {resolution.model}
-              {resolution.graphContextUsed ? " · Graph AST & commit evidence utilized" : ""}
+              {resolution.graphContextUsed ? " · Linked graph context used" : ""}
             </span>
           </div>
           <pre className="app-cypher">{resolution.suggestion}</pre>

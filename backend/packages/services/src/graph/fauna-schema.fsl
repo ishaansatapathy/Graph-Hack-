@@ -1,0 +1,41 @@
+// Tenant-scoped graph storage for Stackfox GraphRAG.
+// Every read and write must include workspaceId in an indexed lookup.
+
+collection GraphNode {
+  workspaceId: String
+  nodeKey: String
+  label: String
+  properties: Any
+  createdAt: Time
+  updatedAt: Time
+
+  unique [.workspaceId, .nodeKey]
+
+  index byWorkspaceAndLabel {
+    terms [.workspaceId, .label]
+    values [.nodeKey]
+  }
+}
+
+collection GraphEdge {
+  workspaceId: String
+  edgeKey: String
+  sourceKey: String
+  targetKey: String
+  type: String
+  properties: Any
+  createdAt: Time
+  updatedAt: Time
+
+  unique [.workspaceId, .edgeKey]
+
+  index byWorkspaceAndSource {
+    terms [.workspaceId, .sourceKey]
+    values [.type, .targetKey]
+  }
+
+  index byWorkspaceAndTarget {
+    terms [.workspaceId, .targetKey]
+    values [.type, .sourceKey]
+  }
+}

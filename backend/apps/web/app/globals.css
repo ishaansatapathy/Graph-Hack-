@@ -1881,6 +1881,7 @@ body {
 
 .ide-file-item {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
@@ -1888,6 +1889,9 @@ body {
   font-size: 0.8rem;
   color: #94a3b8;
   cursor: pointer;
+  border: 0;
+  background: transparent;
+  text-align: left;
   transition: background 0.1s, color 0.1s;
 }
 
@@ -2347,5 +2351,57 @@ body {
 .stat-sub {
   font-size: 0.75rem;
   color: #94a3b8;
+}
+
+.deployment-hub { display: grid; gap: 18px; }
+.deployment-hub-header h3, .deployment-register-card h4, .deployment-console h4 { margin: 0; }
+.deployment-register-card, .deployment-console, .deployment-empty {
+  background: rgba(15, 17, 23, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 18px;
+}
+.deployment-register-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.deployment-layout { display: grid; grid-template-columns: minmax(220px, 0.8fr) minmax(0, 2fr); gap: 16px; }
+.deployment-service-list { display: grid; align-content: start; gap: 8px; }
+.deployment-service-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(15, 17, 23, 0.65);
+}
+.deployment-service-card.active { border-color: rgba(129, 140, 248, 0.55); background: rgba(99, 102, 241, 0.1); }
+.deployment-service-select {
+  display: grid;
+  flex: 1;
+  gap: 5px;
+  min-width: 0;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: #e2e8f0;
+  text-align: left;
+  cursor: pointer;
+}
+.deployment-service-select code { overflow: hidden; color: #94a3b8; text-overflow: ellipsis; white-space: nowrap; }
+.deployment-request-row { display: flex; gap: 8px; margin: 14px 0; }
+.deployment-body { min-height: 120px; font-family: monospace; }
+.deployment-response { margin-top: 16px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; }
+.deployment-response-meta { display: flex; justify-content: space-between; padding: 10px 12px; background: rgba(255, 255, 255, 0.04); }
+.deployment-response pre { max-height: 420px; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.deployment-status-ok { color: #34d399; }
+.deployment-status-error { color: #f87171; }
+@media (max-width: 760px) {
+  .deployment-register-grid, .deployment-layout { grid-template-columns: 1fr; }
+  .deployment-request-row { flex-wrap: wrap; }
 }
 

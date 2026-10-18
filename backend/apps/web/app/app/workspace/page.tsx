@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { trpc } from "~/lib/trpc";
+import { DeploymentsPanel } from "~/components/app/deployments-panel";
 
 type Workspace = {
   id: string;
@@ -44,7 +45,8 @@ type HealthData = {
 
 export default function WorkspaceHubPage() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [activeTab, setActiveTab] = useState<"members" | "apikeys" | "usage" | "health">("members");
+  const [platformAdmin, setPlatformAdmin] = useState(false);
+  const [activeTab, setActiveTab] = useState<"members" | "apikeys" | "deployments" | "usage" | "health">("members");
 
   // Members state
   const [members, setMembers] = useState<Member[]>([]);
@@ -76,6 +78,7 @@ export default function WorkspaceHubPage() {
     prunedDeviceQuotas: number;
     prunedExpiredInvites: number;
     reapedStaleSyncRuns: number;
+    prunedGithubWebhookDeliveries: number;
   } | null>(null);
 
   const [loading, setLoading] = useState(true);
@@ -88,6 +91,7 @@ export default function WorkspaceHubPage() {
         setWorkspace(ws as Workspace);
       })
       .catch(() => {});
+    void trpc.auth.me.query({}).then((user) => setPlatformAdmin(user.role === "admin")).catch(() => {});
   }, []);
 
   const loadMembers = useCallback(async (wsId: string) => {
@@ -274,6 +278,13 @@ export default function WorkspaceHubPage() {
           onClick={() => setActiveTab("usage")}
         >
           📊 AI Usage & Spend
+        </button>
+        <button
+          type="button"
+          className={`workspace-tab-btn ${activeTab === "deployments" ? "active" : ""}`}
+          onClick={() => setActiveTab("deployments")}
+        >
+          Shared Services
         </button>
         <button
           type="button"
@@ -497,6 +508,12 @@ export default function WorkspaceHubPage() {
           </div>
         ) : null}
 
+        {activeTab === "deployments" ? (
+          <div className="tab-pane">
+            <DeploymentsPanel workspaceId={workspace.id} role={workspace.role} />
+          </div>
+        ) : null}
+
         {/* ── 3. AI Usage & Spend ── */}
         {activeTab === "usage" ? (
           <div className="tab-pane">
@@ -588,7 +605,7 @@ export default function WorkspaceHubPage() {
               </div>
             </div>
 
-            {/* Housekeeping Box */}
+            {platformAdmin ? <>
             <div className="workspace-invite-box" style={{ marginTop: "24px" }}>
               <h4>Automated Database Housekeeping</h4>
               <p className="app-muted" style={{ fontSize: "0.85rem", margin: "4px 0 12px" }}>
@@ -611,10 +628,12 @@ export default function WorkspaceHubPage() {
                     <li>Pruned {housekeepingReport.prunedDeviceQuotas} expired rate-limit buckets</li>
                     <li>Pruned {housekeepingReport.prunedExpiredInvites} expired invites</li>
                     <li>Reaped {housekeepingReport.reapedStaleSyncRuns} stale sync runs</li>
+                    <li>Pruned {housekeepingReport.prunedGithubWebhookDeliveries} old GitHub delivery records</li>
                   </ul>
                 </div>
               ) : null}
             </div>
+            </> : null}
           </div>
         ) : null}
       </div>

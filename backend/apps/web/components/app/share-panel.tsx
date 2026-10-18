@@ -14,13 +14,15 @@ type ApiKeyRow = {
 
 type Props = {
   workspaceId: string;
+  role: "owner" | "admin" | "member";
 };
 
-export function SharePanel({ workspaceId }: Props) {
+export function SharePanel({ workspaceId, role }: Props) {
   const [keys, setKeys] = useState<ApiKeyRow[]>([]);
   const [name, setName] = useState("Demo integration");
   const [revealed, setRevealed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const canManageKeys = role === "owner" || role === "admin";
 
   const load = useCallback(async () => {
     try {
@@ -59,15 +61,19 @@ export function SharePanel({ workspaceId }: Props) {
 
   return (
     <div className="app-share">
-      <p className="app-muted">Workspace-scoped API keys — share read access with teammates or scripts.</p>
+      <p className="app-muted">
+        Workspace-scoped keys grant read-only graph access. Create and revoke them as a workspace owner or admin.
+      </p>
+      {!canManageKeys ? <p className="app-muted">Ask a workspace owner or admin to manage API keys.</p> : null}
       <div className="app-ask-form">
         <input
           className="app-input"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Key name"
+          disabled={!canManageKeys}
         />
-        <button type="button" className="app-btn" disabled={busy || !name.trim()} onClick={() => void createKey()}>
+        <button type="button" className="app-btn" disabled={!canManageKeys || busy || !name.trim()} onClick={() => void createKey()}>
           Create key
         </button>
       </div>
@@ -82,12 +88,16 @@ export function SharePanel({ workspaceId }: Props) {
           <li key={k.id}>
             <span>{k.name}</span>
             <code>{k.prefix}…</code>
-            <button type="button" className="app-btn-ghost app-btn-small" disabled={busy} onClick={() => void revoke(k.id)}>
-              Revoke
-            </button>
+            {canManageKeys ? (
+              <button type="button" className="app-btn-ghost app-btn-small" disabled={busy} onClick={() => void revoke(k.id)}>
+                Revoke
+              </button>
+            ) : null}
           </li>
         ))}
-        {keys.length === 0 ? <li className="app-muted">No API keys yet</li> : null}
+        {keys.length === 0 ? (
+          <li className="app-muted">{canManageKeys ? "No API keys yet" : "API key details are visible to workspace owners and admins"}</li>
+        ) : null}
       </ul>
       <h3 className="app-section-title">Shared tools</h3>
       <ToolsPanel workspaceId={workspaceId} />

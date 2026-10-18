@@ -12,7 +12,7 @@ import { and, eq, isNull, lt, sql } from "drizzle-orm";
 
 import { childLogger } from "../logger";
 import { db } from "./client";
-import { deviceQuota, syncRuns, workspaceInvites } from "./schema";
+import { deviceQuota, githubWebhookDeliveries, syncRuns, workspaceInvites } from "./schema";
 
 const log = childLogger("db-housekeeping");
 
@@ -22,6 +22,7 @@ export interface HousekeepingReport {
   prunedDeviceQuotas: number;
   prunedExpiredInvites: number;
   reapedStaleSyncRuns: number;
+  prunedGithubWebhookDeliveries: number;
   success: boolean;
   error?: string;
 }
@@ -62,7 +63,7 @@ export async function pruneExpiredInvites(daysExpired = 14): Promise<number> {
  * 3. Reap stale sync runs that have been stuck in "running" status for > `maxAgeMinutes` (default: 15 minutes).
  * This handles worker crashes, network aborts, or server restarts.
  */
-export async function reapStaleSyncRuns(maxAgeMinutes = 15): Promise<number> {
+export async function reapStaleSyncRuns(maxAgeMinutes = 3): Promise<number> {
   const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
 
   const updated = await db
@@ -74,11 +75,19 @@ export async function reapStaleSyncRuns(maxAgeMinutes = 15): Promise<number> {
     })
     .where(and(
       eq(syncRuns.status, "running"),
-      lt(syncRuns.startedAt, cutoff),
+      lt(syncRuns.heartbeatAt, cutoff),
     ))
     .returning({ id: syncRuns.id });
 
   return updated.length;
+}
+
+export async function pruneOldGithubWebhookDeliveries(daysToKeep = 30): Promise<number> {
+  const cutoff = new Date(Date.now() - daysToKeep * 24 * 60 * 60 * 1000);
+  const removed = await db.delete(githubWebhookDeliveries)
+    .where(lt(githubWebhookDeliveries.startedAt, cutoff))
+    .returning({ deliveryId: githubWebhookDeliveries.deliveryId });
+  return removed.length;
 }
 
 /**
@@ -89,10 +98,11 @@ export async function runDatabaseHousekeeping(): Promise<HousekeepingReport> {
   const timestamp = new Date().toISOString();
 
   try {
-    const [prunedDeviceQuotas, prunedExpiredInvites, reapedStaleSyncRuns] = await Promise.all([
+    const [prunedDeviceQuotas, prunedExpiredInvites, reapedStaleSyncRuns, prunedGithubWebhookDeliveries] = await Promise.all([
       pruneExpiredDeviceQuotas(7),
       pruneExpiredInvites(14),
-      reapStaleSyncRuns(15),
+      reapStaleSyncRuns(3),
+      pruneOldGithubWebhookDeliveries(30),
     ]);
 
     const durationMs = Date.now() - start;
@@ -102,6 +112,7 @@ export async function runDatabaseHousekeeping(): Promise<HousekeepingReport> {
       prunedDeviceQuotas,
       prunedExpiredInvites,
       reapedStaleSyncRuns,
+      prunedGithubWebhookDeliveries,
       success: true,
     };
 
@@ -116,6 +127,7 @@ export async function runDatabaseHousekeeping(): Promise<HousekeepingReport> {
       prunedDeviceQuotas: 0,
       prunedExpiredInvites: 0,
       reapedStaleSyncRuns: 0,
+      prunedGithubWebhookDeliveries: 0,
       success: false,
       error,
     };

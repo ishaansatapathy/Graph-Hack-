@@ -4,11 +4,12 @@ import express from "express";
 import * as trpcExpress from "@trpc/server/adapters/express";
 import { createContext, serverRouter } from "@stackfox/trpc/server";
 
-import { checkDatabaseHealth } from "@stackfox/services";
+import { checkDatabaseHealth, startIntegrationSyncWorker } from "@stackfox/services";
 
 import { env } from "./env";
 import { githubWebhookRouter } from "./routes/github-webhook";
 import { googleAuthRouter } from "./routes/google-auth";
+import { platformRouter } from "./routes/platform";
 import { scenarioRouter } from "./routes/scenario";
 
 const PORT = Number(process.env.PORT ?? 8000);
@@ -25,6 +26,7 @@ app.use("/webhooks/github", githubWebhookRouter);
 app.use(express.json({ limit: "2mb" }));
 
 app.use(scenarioRouter);
+app.use(platformRouter);
 
 app.get("/", (_req, res) => {
   res.json({
@@ -61,4 +63,6 @@ app.use(
 app.listen(PORT, () => {
   console.log(`API listening on http://localhost:${PORT}`);
   console.log(`tRPC endpoint http://localhost:${PORT}/trpc`);
+  startIntegrationSyncWorker();
+  console.log("PostgreSQL-backed integration sync worker started");
 });

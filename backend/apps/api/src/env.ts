@@ -7,6 +7,7 @@ function normalizeEnvUrl(value: string) {
 const envSchema = z.object({
   PORT: z.string().optional(),
   NODE_ENV: z.enum(["development", "prod", "production", "test"]).default("development"),
+  DEV_LOGIN_ENABLED: z.enum(["true", "false"]).default("false"),
   CLIENT_URL: z.string().default("http://localhost:3000"),
 });
 
