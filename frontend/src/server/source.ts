@@ -1,53 +1,64 @@
 import "server-only";
-import type { ScenarioSnapshot } from "@/lib/types";
-import { script, snapshot } from "./fixture";
 
-/** When set, the API routes proxy to the Stackfox backend (FalkorDB-backed).
-    Otherwise the built-in demo scenario is served. */
-const BACKEND = (process.env.STACKFOX_BACKEND_URL ?? process.env.SYNK_BACKEND_URL)?.replace(/\/$/, "");
+/** Every dashboard request is proxied to the Stackfox backend, carrying the
+    browser's session cookie. There is no local data source. */
+const BACKEND = (process.env.STACKFOX_BACKEND_URL ?? process.env.SYNK_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 const unreachable = (err: unknown) =>
-  new Error(
-    `Stackfox backend not reachable at ${BACKEND}. ` +
-      `(${err instanceof Error ? err.message : String(err)})`,
-  );
+  `Stackfox backend not reachable at ${BACKEND}. (${err instanceof Error ? err.message : String(err)})`;
 
-async function backendError(res: Response, path: string) {
-  const body = (await res.json().catch(() => null)) as { error?: string } | null;
-  return new Error(body?.error ?? `backend ${path} ${res.status}`);
+function forwardHeaders(req: Request, extra: Record<string, string> = {}) {
+  const headers: Record<string, string> = { ...extra };
+  const cookie = req.headers.get("cookie");
+  if (cookie) headers.cookie = cookie;
+  return headers;
 }
 
-export async function getScenario(): Promise<ScenarioSnapshot> {
-  if (!BACKEND) return snapshot;
-  let res: Response;
+/** Relays a backend JSON response, including any refreshed session cookies. */
+async function relay(res: Response) {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  for (const c of res.headers.getSetCookie()) headers.append("Set-Cookie", c);
+  return new Response(await res.text(), { status: res.status, headers });
+}
+
+const fail = (message: string, status = 502) => Response.json({ error: message }, { status });
+
+export async function proxyJson(req: Request, path: string, init: { method?: string; body?: string } = {}) {
   try {
-    res = await fetch(`${BACKEND}/scenario`, { cache: "no-store" });
+    const res = await fetch(`${BACKEND}${path}`, {
+      method: init.method ?? "GET",
+      body: init.body,
+      headers: forwardHeaders(req, init.body ? { "Content-Type": "application/json" } : {}),
+      cache: "no-store",
+    });
+    return relay(res);
   } catch (err) {
-    throw unreachable(err);
+    return fail(unreachable(err));
   }
-  if (!res.ok) throw await backendError(res, "/scenario");
-  return res.json();
 }
 
 const encoder = new TextEncoder();
 
-/** Proxies the backend's Server-Sent Events stream of a scenario run. */
-export function streamEvents(signal: AbortSignal, speed = 1): ReadableStream<Uint8Array> {
-  if (!BACKEND) return demoStream(signal, speed);
+/** Proxies the backend's Server-Sent Events stream for the signed-in workspace. */
+export function streamEvents(req: Request): ReadableStream<Uint8Array> {
+  const signal = req.signal;
   return new ReadableStream({
     async start(controller) {
-      const fail = (message: string) => {
+      const error = (message: string) => {
         controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`));
         controller.close();
       };
       let res: Response;
       try {
-        res = await fetch(`${BACKEND}/events?speed=${speed}`, { signal, cache: "no-store" });
+        res = await fetch(`${BACKEND}/live/events`, { signal, headers: forwardHeaders(req), cache: "no-store" });
       } catch (err) {
-        if (!signal.aborted) fail(unreachable(err).message);
+        if (!signal.aborted) error(unreachable(err));
         return;
       }
-      if (!res.ok || !res.body) return fail((await backendError(res, "/events")).message);
+      if (!res.ok || !res.body) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        return error(body?.error ?? `backend /live/events ${res.status}`);
+      }
       const reader = res.body.getReader();
       try {
         for (;;) {
@@ -55,6 +66,7 @@ export function streamEvents(signal: AbortSignal, speed = 1): ReadableStream<Uin
           if (done) break;
           controller.enqueue(value);
         }
+        controller.enqueue(encoder.encode("event: end\ndata: {}\n\n"));
         controller.close();
       } catch {
         if (!signal.aborted) controller.close();
@@ -63,29 +75,4 @@ export function streamEvents(signal: AbortSignal, speed = 1): ReadableStream<Uin
   });
 }
 
-const sleep = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
-  });
-
-/** Replays the built-in demo scenario as Server-Sent Events. */
-function demoStream(signal: AbortSignal, speed: number): ReadableStream<Uint8Array> {
-  return new ReadableStream({
-    async start(controller) {
-      let last = 0;
-      controller.enqueue(encoder.encode("retry: 600000\n\n"));
-      for (const ev of script) {
-        await sleep((ev.at - last) / speed, signal);
-        if (signal.aborted) break;
-        last = ev.at;
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(ev)}\n\n`));
-      }
-      if (!signal.aborted) {
-        controller.enqueue(encoder.encode("event: end\ndata: {}\n\n"));
-        controller.close();
-      }
-    },
-  });
-}
+export { BACKEND };

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { AlertTriangle, ArrowRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -39,7 +40,8 @@ function GitHubMark({ className }: { className?: string }) {
 }
 
 export function SignInForm() {
-  const [state, setState] = useState<State>({ s: "idle" });
+  const callbackError = useSearchParams().get("error");
+  const [state, setState] = useState<State>(callbackError ? { s: "error", message: callbackError } : { s: "idle" });
   const [email, setEmail] = useState("");
 
   async function signIn(method: "google" | "github" | "email") {

@@ -102,8 +102,8 @@ export function EventLog({
             {stream !== "error" && log.length === 0 && (
               <EmptyState
                 icon={<TerminalSquare size={16} strokeWidth={1.5} />}
-                title={stream === "connecting" ? "Connecting to agents…" : "No events yet"}
-                body="Run the scenario to stream every agent action and MCP tool call — with arguments and results — as it happens."
+                title={stream === "connecting" ? "Connecting to workspace…" : "No events yet"}
+                body="Imports, pushes and conflict checks stream here — every GitHub call and graph query with its arguments and results."
               />
             )}
             {rows.map((e) => (

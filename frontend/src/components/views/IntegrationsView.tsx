@@ -1,384 +1,350 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, CheckCircle2, Database, GitBranch, GitCommit, History, MessageSquare, RefreshCw, Send, ShieldCheck, Ticket } from "lucide-react";
+import { useState } from "react";
+import { Database, ExternalLink, GitBranch, History, MessageSquare, RefreshCw, Ticket } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { apiFetch, errorMessage, NoticeBar, useResource, ViewError, ViewLoading, type Notice } from "./shared";
 
-interface JiraTask {
-  id: string;
-  title: string;
-  assignee: string;
-  status: string;
-  linkedBranch: string;
-  graphLinkedNodes: string[];
+type Provider = "github" | "jira" | "slack";
+
+interface IntegrationSummary {
+  provider: Provider;
+  configured: boolean;
+  maskedSecrets: Record<string, string | null>;
+  updatedAt: string | null;
 }
 
-interface SlackAlert {
+interface SyncRun {
   id: string;
-  channel: string;
-  text: string;
-  timestamp: string;
-}
-
-interface AuditLogItem {
-  id: string;
-  action: string;
-  detail: string;
-  createdAt: string;
+  provider: string;
+  status: "queued" | "running" | "ok" | "error";
+  items: number;
+  message: string;
+  startedAt: string;
 }
 
 interface IntegrationsData {
-  jira: {
-    connected: boolean;
-    configuredInDb?: boolean;
-    projectKey: string;
-    autoTransitionOnCommit: boolean;
-    tasks: JiraTask[];
-  };
-  slack: {
-    connected: boolean;
-    configuredInDb?: boolean;
-    channel: string;
-    alerts: SlackAlert[];
-  };
-  github: {
-    connected: boolean;
-    repo: string;
-    branch: string;
-    openPrCount: number;
-  };
+  canManage: boolean;
+  integrations: IntegrationSummary[];
+  runs: SyncRun[];
+  jiraIssues: { key: string; title: string; status: string; priority: string; url: string }[];
+  slackMessages: { ts: string; text: string; user: string; url: string; channel: string }[];
 }
 
+interface AuditItem {
+  id: string;
+  action: string;
+  detail: string | null;
+  createdAt: string;
+}
+
+const FIELDS: Record<Provider, { name: string; label: string; type?: string; placeholder: string }[]> = {
+  github: [
+    { name: "repositoryFullName", label: "Repository", placeholder: "owner/name" },
+    { name: "personalAccessToken", label: "Personal access token", type: "password", placeholder: "github_pat_…" },
+  ],
+  jira: [
+    { name: "baseUrl", label: "Jira site", placeholder: "https://your-team.atlassian.net" },
+    { name: "email", label: "Account email", type: "email", placeholder: "you@company.com" },
+    { name: "apiToken", label: "API token", type: "password", placeholder: "Atlassian API token" },
+  ],
+  slack: [{ name: "webhookUrl", label: "Incoming webhook URL", type: "password", placeholder: "https://hooks.slack.com/services/…" }],
+};
+
+const META: Record<Provider, { title: string; icon: React.ReactNode; about: string }> = {
+  github: {
+    title: "GitHub",
+    icon: <GitBranch className="size-4" />,
+    about: "Lets the IDE browse and commit to the repository, and adds diff evidence to conflicts.",
+  },
+  jira: { title: "Jira", icon: <Ticket className="size-4" />, about: "Syncs issues into the workspace graph so commits and conflicts can reference them." },
+  slack: { title: "Slack", icon: <MessageSquare className="size-4" />, about: "Posts push updates to a channel through an incoming webhook." },
+};
+
 export function IntegrationsView() {
-  const [data, setData] = useState<IntegrationsData | null>(null);
-  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const { state, reload } = useResource<IntegrationsData>("/api/integrations");
+  const audit = useResource<{ logs: AuditItem[] }>("/api/integrations/audit-log");
+  const [notice, setNotice] = useState<Notice>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  // Slack live testing state
-  const [showSlackTest, setShowSlackTest] = useState(false);
-  const [testWebhookUrl, setTestWebhookUrl] = useState("");
-  const [testingSlack, setTestingSlack] = useState(false);
-  const [slackTestResult, setSlackTestResult] = useState<string | null>(null);
+  if (state.status === "loading") return <ViewLoading label="Loading integrations…" />;
+  if (state.status === "error") return <ViewError title="Couldn't load integrations" error={state.error} onRetry={() => reload(false)} />;
 
-  const loadData = async () => {
+  const data = state.data;
+
+  /** Runs an action, shows its result, refreshes; resolves true when it succeeded. */
+  const act = async (key: string, run: () => Promise<{ message?: string; ok?: boolean }>): Promise<boolean> => {
+    setBusy(key);
+    setNotice(null);
     try {
-      const [res, auditRes] = await Promise.all([
-        fetch("/api/integrations"),
-        fetch("/api/integrations/audit-log"),
-      ]);
-      if (res.ok) {
-        const json = await res.json();
-        setData(json);
-      }
-      if (auditRes.ok) {
-        const auditJson = await auditRes.json();
-        setAuditLogs(auditJson.logs ?? []);
-      }
-    } catch {
-      // fallback handled gracefully
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void loadData();
-  }, []);
-
-  const triggerCommitSync = async () => {
-    setSyncing(true);
-    setSyncResult(null);
-    try {
-      const res = await fetch("/api/integrations/commit-sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sha: "8b7f1a3",
-          commitMessage: "fix(billing): read primaryEmail with fallback (closes #STACK-42)",
-          author: "Agent B",
-        }),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setSyncResult(json.message);
-        await loadData();
-      }
-    } catch {
-      setSyncResult("Failed to dispatch commit sync");
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const handleTestSlack = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!testWebhookUrl.trim()) return;
-    setTestingSlack(true);
-    setSlackTestResult(null);
-    try {
-      const res = await fetch("/api/integrations/slack/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ webhookUrl: testWebhookUrl.trim() }),
-      });
-      const json = await res.json();
-      if (res.ok) {
-        setSlackTestResult(json.message ?? "Slack test message dispatched!");
-        await loadData();
-      } else {
-        setSlackTestResult(`Error: ${json.error ?? "Failed to reach Slack"}`);
-      }
+      const r = await run();
+      setNotice({ tone: r.ok === false ? "error" : "ok", text: r.message ?? "Done" });
+      reload();
+      audit.reload();
+      return r.ok !== false;
     } catch (err) {
-      setSlackTestResult(err instanceof Error ? err.message : "Error testing Slack");
+      setNotice({ tone: "error", text: errorMessage(err) });
+      return false;
     } finally {
-      setTestingSlack(false);
+      setBusy(null);
     }
   };
-
-  if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center bg-bg font-mono text-[12px] text-fg-3">
-        <RefreshCw className="mr-2 size-4 animate-spin text-accent" /> Loading integrations & FalkorDB sync pipeline…
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-bg p-6 font-sans text-fg">
-      {/* Header Banner */}
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-line pb-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-[17px] font-semibold text-fg">Jira & Slack AST Synchronizer</h1>
-            <span className="rounded border border-pass/30 bg-pass/10 px-2 py-0.5 font-mono text-[11px] text-pass">
-              Active Sync Engine
-            </span>
-          </div>
-          <p className="mt-1 text-[13px] text-fg-2">
-            FalkorDB automatically transitions Jira issues, validates pull requests, and alerts Slack on AST contract drift.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => void triggerCommitSync()}
-            disabled={syncing}
-            className="gap-2"
-          >
-            {syncing ? <RefreshCw className="size-3.5 animate-spin" /> : <GitCommit className="size-3.5 text-accent-ink" />}
-            Simulate Git Commit (closes #STACK-42)
-          </Button>
-        </div>
+      <div className="mb-6 border-b border-line pb-4">
+        <h1 className="text-[17px] font-semibold text-fg">Integrations</h1>
+        <p className="mt-1 text-[13px] text-fg-2">
+          Connect the tools your workspace graph reads from. Secrets are stored encrypted and only shown masked.
+          {!data.canManage && " Only owners and admins can change connections."}
+        </p>
       </div>
 
-      {syncResult && (
-        <div className="mb-6 flex items-center justify-between rounded-md border border-pass/30 bg-pass/10 px-4 py-2.5 font-mono text-[12px] text-pass">
-          <span className="flex items-center gap-2">
-            <CheckCircle2 className="size-4" />
-            {syncResult}
-          </span>
-          <span className="text-[11px] opacity-75">FalkorDB graph updated · STACK-42 transitioned</span>
-        </div>
-      )}
+      <NoticeBar notice={notice} onDismiss={() => setNotice(null)} />
 
-      {/* Grid: Jira & Slack */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Jira Panel */}
-        <div className="flex flex-col rounded-lg border border-line bg-surface-1 p-5">
-          <div className="mb-4 flex items-center justify-between border-b border-line pb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="flex size-7 items-center justify-center rounded bg-blue-500/20 text-blue-400">
-                <Ticket className="size-4" />
-              </div>
-              <div>
-                <h2 className="text-[14px] font-medium text-fg">Jira Cloud Workspace</h2>
-                <p className="font-mono text-[11px] text-fg-3">Project: {data?.jira.projectKey ?? "STACK"} (Checkout Service)</p>
-              </div>
-            </div>
-            <span className="flex items-center gap-1.5 font-mono text-[11px] text-pass">
-              <span className="size-1.5 rounded-full bg-pass" />
-              Connected
-            </span>
-          </div>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        {data.integrations.map((it) => (
+          <IntegrationCard
+            key={it.provider}
+            item={it}
+            canManage={data.canManage}
+            busy={busy}
+            onConnect={(values) =>
+              act(`${it.provider}:connect`, () => apiFetch(`/api/integrations/${it.provider}`, { method: "POST", body: values }))
+            }
+            onTest={() => act(`${it.provider}:test`, () => apiFetch(`/api/integrations/${it.provider}/test`, { method: "POST", body: {} }))}
+            onSync={() => act(`${it.provider}:sync`, () => apiFetch(`/api/integrations/${it.provider}/sync`, { method: "POST", body: {} }))}
+            onDisconnect={() => {
+              if (!window.confirm(`Disconnect ${META[it.provider].title}? Its stored credentials are deleted.`)) return;
+              void act(`${it.provider}:remove`, async () => {
+                await apiFetch(`/api/integrations/${it.provider}`, { method: "DELETE" });
+                return { message: `${META[it.provider].title} disconnected` };
+              });
+            }}
+          />
+        ))}
+      </div>
 
-          <div className="mb-4 flex items-center justify-between rounded border border-line bg-surface-2 px-3 py-2 text-[12px]">
-            <span className="text-fg-2">Auto-transition Jira issues on Git commit</span>
-            <span className="font-mono text-[11px] font-semibold text-accent">ENABLED</span>
-          </div>
-
-          <div className="space-y-3">
-            <p className="font-mono text-[11px] uppercase tracking-wider text-fg-3">Tracked Sprint Tasks</p>
-            {data?.jira.tasks.map((task) => (
-              <div
-                key={task.id}
-                className="rounded-md border border-line bg-surface-2/60 p-3.5 transition-colors hover:border-line-strong"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-[12px] font-bold text-accent">{task.id}</span>
-                    <span className="text-[13px] font-medium text-fg">{task.title}</span>
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <Panel icon={<Ticket className="size-4 text-accent" />} title={`Synced Jira issues (${data.jiraIssues.length})`}>
+          {data.jiraIssues.length === 0 ? (
+            <Empty>No Jira issues in the graph yet. Connect Jira and run a sync.</Empty>
+          ) : (
+            <div className="space-y-2">
+              {data.jiraIssues.map((i) => (
+                <div key={i.key} className="flex items-center justify-between gap-3 rounded border border-line bg-surface-2/60 px-3 py-2">
+                  <div className="min-w-0">
+                    <span className="mr-2 font-mono text-[12px] font-bold text-accent">{i.key}</span>
+                    <span className="text-[12.5px] text-fg">{i.title}</span>
                   </div>
-                  <span
-                    className={`rounded px-2 py-0.5 font-mono text-[10.5px] font-medium ${
-                      task.status === "DONE"
-                        ? "border border-pass/30 bg-pass/10 text-pass"
-                        : "border border-accent/30 bg-accent/10 text-accent"
-                    }`}
-                  >
-                    {task.status}
+                  <span className="flex shrink-0 items-center gap-2 font-mono text-[10.5px] text-fg-3">
+                    {i.status}
+                    {i.url && (
+                      <a href={i.url} target="_blank" rel="noreferrer" className="hover:text-fg" aria-label={`Open ${i.key} in Jira`}>
+                        <ExternalLink className="size-3" />
+                      </a>
+                    )}
                   </span>
-                </div>
-
-                <div className="mt-2.5 flex flex-wrap items-center gap-3 font-mono text-[11px] text-fg-3">
-                  <span className="flex items-center gap-1 text-fg-2">
-                    <GitBranch className="size-3 text-fg-3" />
-                    {task.linkedBranch}
-                  </span>
-                  <span>Assignee: {task.assignee}</span>
-                  <span className="text-fg-3">Graph nodes: {task.graphLinkedNodes.join(", ")}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Slack Panel */}
-        <div className="flex flex-col rounded-lg border border-line bg-surface-1 p-5">
-          <div className="mb-4 flex items-center justify-between border-b border-line pb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="flex size-7 items-center justify-center rounded bg-amber-500/20 text-amber-400">
-                <MessageSquare className="size-4" />
-              </div>
-              <div>
-                <h2 className="text-[14px] font-medium text-fg">Slack Bot & Channel Stream</h2>
-                <p className="font-mono text-[11px] text-fg-3">Target: {data?.slack.channel ?? "#eng-checkout-team"}</p>
-              </div>
-            </div>
-            <span className="flex items-center gap-1.5 font-mono text-[11px] text-pass">
-              <span className="size-1.5 rounded-full bg-pass" />
-              Live Bot
-            </span>
-          </div>
-
-          <div className="mb-4 flex items-center justify-between rounded border border-line bg-surface-2 px-3 py-2 text-[12px]">
-            <span className="text-fg-2">Real-time alerts on AST contract breaks</span>
-            <span className="font-mono text-[11px] font-semibold text-accent">ACTIVE</span>
-          </div>
-
-          <div className="flex flex-1 flex-col space-y-3">
-            <p className="font-mono text-[11px] uppercase tracking-wider text-fg-3">Recent Bot Dispatches</p>
-            <div className="flex-1 space-y-2.5">
-              {data?.slack.alerts.map((alert) => (
-                <div
-                  key={alert.id}
-                  className="rounded-md border border-line bg-surface-2/60 p-3 font-mono text-[11.5px] leading-relaxed text-fg-2"
-                >
-                  <div className="mb-1 flex items-center justify-between text-[10.5px] text-fg-3">
-                    <span className="text-accent">{alert.channel}</span>
-                    <span>{new Date(alert.timestamp).toLocaleTimeString()}</span>
-                  </div>
-                  <div className="text-fg" dangerouslySetInnerHTML={{
-                    __html: alert.text
-                      .replace(/\*(.*?)\*/g, "<strong>$1</strong>")
-                      .replace(/`(.*?)`/g, "<code class='bg-surface-3 px-1 py-0.5 rounded text-accent'>$1</code>")
-                  }} />
                 </div>
               ))}
             </div>
+          )}
+        </Panel>
 
-            <div className="mt-3 flex flex-col gap-2 rounded border border-line bg-surface-2 p-3 text-[12px]">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 font-medium text-fg">
-                  <Send className="size-3.5 text-accent" />
-                  Live Slack Webhook Dispatch
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowSlackTest(!showSlackTest)}
-                  className="font-mono text-[11px] text-accent hover:underline"
-                >
-                  {showSlackTest ? "Hide Test Form" : "Test Incoming Webhook"}
-                </button>
-              </div>
-
-              {showSlackTest && (
-                <form onSubmit={handleTestSlack} className="mt-2 space-y-2 border-t border-line/60 pt-2">
-                  <input
-                    type="url"
-                    value={testWebhookUrl}
-                    onChange={(e) => setTestWebhookUrl(e.target.value)}
-                    placeholder="https://hooks.slack.com/services/..."
-                    className="w-full rounded border border-line bg-surface-1 px-2.5 py-1.5 font-mono text-[11.5px] text-fg focus:border-accent focus:outline-none"
-                  />
-                  <div className="flex items-center justify-between">
-                    <Button
-                      type="submit"
-                      size="sm"
-                      variant="primary"
-                      disabled={testingSlack || !testWebhookUrl.trim()}
-                      className="gap-1.5"
-                    >
-                      {testingSlack ? <RefreshCw className="size-3 animate-spin" /> : <Send className="size-3" />}
-                      Dispatch Live Test Message
-                    </Button>
-                    {slackTestResult && (
-                      <span className="font-mono text-[11px] text-accent">{slackTestResult}</span>
-                    )}
+        <Panel icon={<MessageSquare className="size-4 text-accent" />} title={`Synced Slack messages (${data.slackMessages.length})`}>
+          {data.slackMessages.length === 0 ? (
+            <Empty>No Slack messages in the graph yet. Reading channels needs a bot token; run a Slack sync after connecting.</Empty>
+          ) : (
+            <div className="space-y-2">
+              {data.slackMessages.map((m) => (
+                <div key={`${m.channel}:${m.ts}`} className="rounded border border-line bg-surface-2/60 p-3 font-mono text-[11.5px] leading-relaxed">
+                  <div className="mb-1 flex justify-between text-[10.5px] text-fg-3">
+                    <span className="text-accent">#{m.channel}</span>
+                    <span>{new Date(Number(m.ts) * 1000).toLocaleString()}</span>
                   </div>
-                </form>
-              )}
+                  {/* Plain text on purpose: Slack content is untrusted. */}
+                  <p className="whitespace-pre-wrap break-words text-fg">{m.text}</p>
+                </div>
+              ))}
             </div>
-          </div>
-        </div>
+          )}
+        </Panel>
       </div>
 
-      {/* PostgreSQL Audit Log Trail */}
-      <div className="mt-6 rounded-lg border border-line bg-surface-1 p-5">
-        <div className="mb-3 flex items-center justify-between border-b border-line pb-3">
-          <div className="flex items-center gap-2">
-            <Database className="size-4 text-accent" />
-            <h3 className="text-[13.5px] font-medium text-fg">Neon PostgreSQL Audit Trail (Live DB)</h3>
-          </div>
-          <span className="font-mono text-[11px] text-fg-3">{auditLogs.length} events recorded</span>
-        </div>
-
-        {auditLogs.length > 0 ? (
-          <div className="space-y-2 font-mono text-[11.5px]">
-            {auditLogs.map((log) => (
-              <div key={log.id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-line bg-surface-2 px-3 py-2 text-fg-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-accent">{log.action}</span>
-                  <span className="text-fg-3">·</span>
-                  <span className="truncate max-w-md text-fg">{log.detail}</span>
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <Panel icon={<RefreshCw className="size-4 text-accent" />} title="Sync runs">
+          {data.runs.length === 0 ? (
+            <Empty>No syncs have run yet.</Empty>
+          ) : (
+            <div className="space-y-1.5 font-mono text-[11.5px]">
+              {data.runs.map((r) => (
+                <div key={r.id} className="flex items-center justify-between gap-3 rounded bg-surface-2 px-3 py-1.5">
+                  <span className="flex items-center gap-2">
+                    <span className={r.status === "ok" ? "text-pass" : r.status === "error" ? "text-conflict" : "text-risk"}>{r.status}</span>
+                    <span className="text-fg-2">{r.provider}</span>
+                    <span className="truncate text-fg-3">{r.message || `${r.items} items`}</span>
+                  </span>
+                  <span className="shrink-0 text-[10.5px] text-fg-3">{new Date(r.startedAt).toLocaleString()}</span>
                 </div>
-                <span className="text-fg-3 text-[10.5px]">{new Date(log.createdAt).toLocaleTimeString()}</span>
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <Panel icon={<History className="size-4 text-accent" />} title="Audit log">
+          {audit.state.status === "loading" && <Empty>Loading…</Empty>}
+          {audit.state.status === "error" && <Empty>{audit.state.error.message}</Empty>}
+          {audit.state.status === "ready" &&
+            (audit.state.data.logs.length === 0 ? (
+              <Empty>No audited actions yet.</Empty>
+            ) : (
+              <div className="space-y-1.5 font-mono text-[11.5px]">
+                {audit.state.data.logs.slice(0, 20).map((log) => (
+                  <div key={log.id} className="flex items-center justify-between gap-3 rounded bg-surface-2 px-3 py-1.5">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="shrink-0 font-semibold text-accent">{log.action}</span>
+                      <span className="truncate text-fg-2">{log.detail}</span>
+                    </span>
+                    <span className="shrink-0 text-[10.5px] text-fg-3">{new Date(log.createdAt).toLocaleString()}</span>
+                  </div>
+                ))}
               </div>
             ))}
-          </div>
-        ) : (
-          <p className="font-mono text-[11.5px] text-fg-3">No audit events recorded yet. Trigger a commit sync to record the first event in Neon DB.</p>
-        )}
-      </div>
-
-      {/* GitHub & FalkorDB Pipeline Status */}
-      <div className="mt-6 rounded-lg border border-line bg-surface-1 p-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <ShieldCheck className="size-5 text-pass" />
-            <div>
-              <h3 className="text-[13.5px] font-medium text-fg">GitHub Webhook Pipeline (FalkorDB Synced)</h3>
-              <p className="font-mono text-[11.5px] text-fg-3">
-                Repository: {data?.github.repo ?? "acme/checkout-service"} · Branch: {data?.github.branch ?? "main"} · Open PRs: {data?.github.openPrCount ?? 3}
-              </p>
-            </div>
-          </div>
-          <span className="font-mono text-[11px] text-fg-2">Synced via Express /trpc & /webhooks/github</span>
-        </div>
+        </Panel>
       </div>
     </div>
+  );
+}
+
+function IntegrationCard({
+  item,
+  canManage,
+  busy,
+  onConnect,
+  onTest,
+  onSync,
+  onDisconnect,
+}: {
+  item: IntegrationSummary;
+  canManage: boolean;
+  busy: string | null;
+  onConnect: (values: Record<string, string>) => Promise<boolean>;
+  onTest: () => void;
+  onSync: () => void;
+  onDisconnect: () => void;
+}) {
+  const meta = META[item.provider];
+  const [editing, setEditing] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const p = item.provider;
+  const shown = Object.entries(item.maskedSecrets).filter(([, v]) => v);
+
+  return (
+    <div className="flex flex-col rounded-lg border border-line bg-surface-1 p-5">
+      <div className="mb-3 flex items-center justify-between border-b border-line pb-3">
+        <div className="flex items-center gap-2.5">
+          <div className="flex size-7 items-center justify-center rounded bg-surface-3 text-accent">{meta.icon}</div>
+          <h2 className="text-[14px] font-medium text-fg">{meta.title}</h2>
+        </div>
+        <span className={`flex items-center gap-1.5 font-mono text-[11px] ${item.configured ? "text-pass" : "text-fg-3"}`}>
+          <span className={`size-1.5 rounded-full ${item.configured ? "bg-pass" : "bg-fg-3"}`} />
+          {item.configured ? "Connected" : "Not connected"}
+        </span>
+      </div>
+      <p className="mb-3 text-[12px] leading-relaxed text-fg-2">{meta.about}</p>
+
+      {shown.length > 0 && (
+        <dl className="mb-3 space-y-1 font-mono text-[11px]">
+          {shown.map(([k, v]) => (
+            <div key={k} className="flex justify-between gap-3">
+              <dt className="text-fg-3">{k}</dt>
+              <dd className="truncate text-fg-2">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {editing && canManage ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void onConnect(values).then((ok) => {
+              if (ok) {
+                setEditing(false);
+                setValues({});
+              }
+            });
+          }}
+          className="mt-auto space-y-2"
+        >
+          {FIELDS[p].map((f) => (
+            <label key={f.name} className="block font-mono text-[11px] text-fg-3">
+              {f.label}
+              <input
+                type={f.type ?? "text"}
+                placeholder={f.placeholder}
+                autoComplete="off"
+                required={!(p === "github" && f.name === "personalAccessToken" && item.configured)}
+                value={values[f.name] ?? ""}
+                onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
+                className="mt-1 w-full rounded border border-line bg-surface-2 px-2.5 py-1.5 text-[12px] text-fg focus:border-accent focus:outline-none"
+              />
+            </label>
+          ))}
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" variant="primary" type="submit" disabled={busy === `${p}:connect`}>
+              {busy === `${p}:connect` ? "Saving…" : "Save"}
+            </Button>
+            <Button size="sm" variant="ghost" type="button" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <div className="mt-auto flex flex-wrap gap-2">
+          {canManage && (
+            <Button size="sm" variant={item.configured ? "ghost" : "primary"} onClick={() => setEditing(true)}>
+              {item.configured ? "Update" : "Connect"}
+            </Button>
+          )}
+          {item.configured && (
+            <Button size="sm" variant="ghost" onClick={onTest} disabled={busy === `${p}:test`}>
+              {busy === `${p}:test` ? "Testing…" : "Test"}
+            </Button>
+          )}
+          {item.configured && p !== "github" && (
+            <Button size="sm" variant="ghost" onClick={onSync} disabled={busy === `${p}:sync`}>
+              {busy === `${p}:sync` ? "Starting…" : "Sync now"}
+            </Button>
+          )}
+          {item.configured && canManage && (
+            <Button size="sm" variant="ghost" onClick={onDisconnect} className="text-conflict">
+              Disconnect
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Panel({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-line bg-surface-1 p-5">
+      <div className="mb-3 flex items-center gap-2 border-b border-line pb-3">
+        {icon}
+        <h3 className="text-[13.5px] font-medium text-fg">{title}</h3>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="flex items-center gap-2 font-mono text-[11.5px] text-fg-3">
+      <Database className="size-3.5 shrink-0 opacity-50" />
+      {children}
+    </p>
   );
 }

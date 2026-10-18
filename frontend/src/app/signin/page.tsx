@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import Link from "next/link";
 import { Logo } from "@/components/ui/logo";
 import { SignInForm } from "./SignInForm";
@@ -20,13 +21,9 @@ export default function SignInPage() {
         <div className="w-full max-w-[380px]">
           <h1 className="text-[28px] font-semibold tracking-[-0.03em]">Sign in to Stackfox</h1>
           <p className="mt-2 text-[15px] text-fg-2">Coordinate your agents on one graph.</p>
-          <SignInForm />
-          <p className="mt-8 text-[13px] text-fg-3">
-            Just looking?{" "}
-            <Link href="/app?autorun=1" className="text-fg-2 underline decoration-line-strong underline-offset-4 hover:text-fg">
-              Open the demo
-            </Link>
-          </p>
+          <Suspense>
+            <SignInForm />
+          </Suspense>
         </div>
       </main>
     </div>

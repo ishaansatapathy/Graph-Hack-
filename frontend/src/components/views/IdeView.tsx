@@ -1,355 +1,314 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { Check, Code2, Database, FileCode2, GitBranch, GitCommit, Play, Save, Terminal } from "lucide-react";
+import { Code2, Database, FileCode2, GitBranch, GitCommit, GitPullRequest, Play, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/state";
+import { apiFetch, errorMessage, NoticeBar, useResource, ViewError, ViewLoading, type Notice, type OpenTab } from "./shared";
 
 const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
   ssr: false,
-  loading: () => (
-    <div className="flex h-full items-center justify-center bg-surface-1 font-mono text-[12px] text-fg-3">
-      Loading Monaco Editor…
-    </div>
-  ),
+  loading: () => <div className="flex h-full items-center justify-center bg-surface-1 font-mono text-[12px] text-fg-3">Loading editor…</div>,
 });
 
-interface FileItem {
+interface RepoInfo {
+  connected: boolean;
+  repository: string | null;
+  defaultBranch: string | null;
+  editBranch: string;
+  branches: { name: string; protected: boolean }[];
+}
+
+interface FileList {
+  branch: string;
+  truncated: boolean;
+  skippedLargeFiles: number;
+  files: { path: string; size: number }[];
+}
+
+interface OpenFile {
   path: string;
-  language: string;
+  branch: string;
+  sha: string;
+  original: string;
   content: string;
+  draft: { content: string; version: number; updatedAt: string | null } | null;
+  draftVersion: number;
 }
 
-const FILES: FileItem[] = [
-  {
-    path: "billing/receipts.ts",
-    language: "typescript",
-    content: `// billing/receipts.ts — Branch: agent-b/receipt-emails
-import { fetchUser } from "@/lib/user-client";
-import { mailer } from "@/lib/mailer";
+const LANG: Record<string, string> = {
+  ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+  json: "json", md: "markdown", css: "css", scss: "scss", html: "html", py: "python", go: "go", rs: "rust",
+  java: "java", rb: "ruby", sh: "shell", yml: "yaml", yaml: "yaml", sql: "sql", c: "c", h: "c", cpp: "cpp",
+};
+const languageOf = (path: string) => LANG[path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext";
 
-export async function sendReceipt(userId: string, orderId: string, amount: number) {
-  const user = await fetchUser(userId);
+const DEFAULT_CYPHER = `MATCH (c:Change)-[:MODIFIES]->(f:File)
+RETURN c.branch AS branch, f.path AS file
+LIMIT 25`;
 
-  // Stackfox Graph Fix: supports both legacy 'email' and schema-v2 'primaryEmail'
-  const recipient = ("primaryEmail" in user ? user.primaryEmail : (user as any).email) as string;
+export function IdeView({ onOpenTab }: { onOpenTab?: OpenTab }) {
+  const repo = useResource<RepoInfo>("/api/workspace/repo");
 
-  return mailer.send({
-    to: recipient.toLowerCase(),
-    subject: \`Your receipt for order \${orderId}\`,
-    body: \`Charged $\${(amount / 100).toFixed(2)}\`,
-  });
+  if (repo.state.status === "loading") return <ViewLoading label="Loading repository…" />;
+  if (repo.state.status === "error") return <ViewError title="Couldn't load the repository" error={repo.state.error} onRetry={() => repo.reload(false)} />;
+
+  const info = repo.state.data;
+  if (!info.connected || !info.repository || !info.defaultBranch) {
+    return (
+      <div className="h-full bg-bg">
+        <EmptyState
+          icon={<GitBranch size={16} strokeWidth={1.5} />}
+          title="Connect a GitHub repository"
+          body="The IDE edits the workspace's GitHub repository. Changes are committed to your own branch, and you open a pull request when ready."
+          action={onOpenTab && <Button size="sm" variant="primary" onClick={() => onOpenTab("integrations")}>Open Integrations</Button>}
+        />
+      </div>
+    );
+  }
+  return <Editor info={info as RepoInfo & { repository: string; defaultBranch: string }} />;
 }
-`,
-  },
-  {
-    path: "schemas/user.ts",
-    language: "typescript",
-    content: `// schemas/user.ts — Branch: agent-a/rename-user-email
-import { z } from "zod";
 
-export const UserSchema = z.object({
-  id: z.string().uuid(),
-  name: z.string(),
-  // Renamed from 'email' to 'primaryEmail' across checkout API
-  primaryEmail: z.string().email(),
-  tier: z.enum(["free", "pro", "enterprise"]),
-  createdAt: z.string().datetime(),
-});
+function Editor({ info }: { info: RepoInfo & { repository: string; defaultBranch: string } }) {
+  const [branch, setBranch] = useState(info.defaultBranch);
+  const files = useResource<FileList>(`/api/workspace/files?branch=${encodeURIComponent(branch)}`);
+  const [filter, setFilter] = useState("");
+  const [open, setOpen] = useState<OpenFile | null>(null);
+  const [opening, setOpening] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"draft" | "commit" | "pr" | null>(null);
+  const [notice, setNotice] = useState<Notice>(null);
+  const [commitMessage, setCommitMessage] = useState("");
 
-export type User = z.infer<typeof UserSchema>;
-`,
-  },
-  {
-    path: "tests/receipts.contract.test.ts",
-    language: "typescript",
-    content: `// tests/receipts.contract.test.ts
-import { describe, it, expect } from "vitest";
-import { sendReceipt } from "../billing/receipts";
-
-describe("sendReceipt contract", () => {
-  it("resolves primaryEmail correctly", async () => {
-    const res = await sendReceipt("usr_123", "ord_456", 2999);
-    expect(res).toBeDefined();
-  });
-});
-`,
-  },
-];
-
-const DEFAULT_CYPHER = `MATCH p = (ca:Change {id: 'PC-A1'})-[:MODIFIES]->(f:Field)
-  <-[:DECLARES]-(s:Schema)<-[:RETURNS]-(ep:Endpoint)
-  <-[:CALLS]-(cli:Function)<-[:CALLS]-(fn:Function)
-  <-[:INTRODUCES]-(cb:Change {id: 'PC-B1'})
-RETURN p;`;
-
-export function IdeView() {
-  const [fileList, setFileList] = useState<{ path: string; language: string }[]>(FILES);
-  const [activeFilePath, setActiveFilePath] = useState("billing/receipts.ts");
-  const [branch, setBranch] = useState("agent-b/receipt-emails");
-  const [editorContent, setEditorContent] = useState<Record<string, string>>(() => {
-    const map: Record<string, string> = {};
-    for (const f of FILES) map[f.path] = f.content;
-    return map;
-  });
-
-  const [bottomTab, setBottomTab] = useState<"terminal" | "cypher">("cypher");
-  const [cypherQuery, setCypherQuery] = useState(DEFAULT_CYPHER);
-  const [cypherOutput, setCypherOutput] = useState<string | null>(null);
+  const [cypher, setCypher] = useState(DEFAULT_CYPHER);
+  const [cypherOut, setCypherOut] = useState<string | null>(null);
   const [runningCypher, setRunningCypher] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
-  // Load real files from workspace
-  useEffect(() => {
-    void fetch("/api/workspace/files")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.files && Array.isArray(data.files) && data.files.length > 0) {
-          setFileList(data.files);
-        }
-      })
-      .catch(() => {});
-  }, []);
+  const visible = useMemo(() => {
+    if (files.state.status !== "ready") return [];
+    const q = filter.trim().toLowerCase();
+    return (q ? files.state.data.files.filter((f) => f.path.toLowerCase().includes(q)) : files.state.data.files).slice(0, 500);
+  }, [files.state, filter]);
 
-  // Load real file content on file selection
-  const handleSelectFile = async (path: string) => {
-    setActiveFilePath(path);
-    if (!editorContent[path]) {
-      try {
-        const res = await fetch(`/api/workspace/files/content?path=${encodeURIComponent(path)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.content) {
-            setEditorContent((prev) => ({ ...prev, [path]: data.content }));
-          }
-        }
-      } catch {
-        // fallback
-      }
-    }
-  };
-
-  const activeFile = fileList.find((f) => f.path === activeFilePath) ?? fileList[0];
-
-  const handleEditorChange = (val?: string) => {
-    if (val !== undefined && activeFile) {
-      setEditorContent((prev) => ({ ...prev, [activeFile.path]: val }));
-    }
-  };
-
-  const handleSave = async () => {
-    if (!activeFile) return;
-    setSaveStatus("Saving to workspace…");
+  const openFile = async (path: string) => {
+    setOpening(path);
+    setNotice(null);
     try {
-      const res = await fetch("/api/workspace/files/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path: activeFile.path,
-          content: editorContent[activeFile.path] ?? "",
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSaveStatus(data.message ?? "Saved to branch working tree");
-      } else {
-        setSaveStatus("Saved to branch working tree");
-      }
-    } catch {
-      setSaveStatus("Saved to branch working tree");
+      const f = await apiFetch<{ path: string; branch: string; sha: string; content: string; draft: OpenFile["draft"] }>(
+        `/api/workspace/files/content?path=${encodeURIComponent(path)}&branch=${encodeURIComponent(branch)}`,
+      );
+      setOpen({ ...f, original: f.content, draftVersion: f.draft?.version ?? 0 });
+    } catch (err) {
+      setNotice({ tone: "error", text: errorMessage(err) });
+    } finally {
+      setOpening(null);
     }
-    setTimeout(() => setSaveStatus(null), 3000);
   };
 
-  const handleRunCypher = async () => {
+  const saveDraft = async () => {
+    if (!open) return;
+    setBusy("draft");
+    try {
+      const saved = await apiFetch<{ version: number }>("/api/workspace/files/draft", {
+        method: "POST",
+        body: { path: open.path, content: open.content, expectedVersion: open.draftVersion },
+      });
+      setOpen({ ...open, draftVersion: saved.version, draft: { content: open.content, version: saved.version, updatedAt: new Date().toISOString() } });
+      setNotice({ tone: "ok", text: `Draft saved for your workspace (version ${saved.version}).` });
+    } catch (err) {
+      setNotice({ tone: "error", text: errorMessage(err) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const commit = async () => {
+    if (!open || !commitMessage.trim()) return;
+    setBusy("commit");
+    try {
+      const saved = await apiFetch<{ branch: string; sha: string }>("/api/workspace/files/commit", {
+        method: "POST",
+        body: { path: open.path, content: open.content, message: commitMessage.trim() },
+      });
+      setNotice({ tone: "ok", text: `Committed ${open.path} to ${saved.branch}.` });
+      setCommitMessage("");
+    } catch (err) {
+      setNotice({ tone: "error", text: errorMessage(err) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openPullRequest = async () => {
+    const title = window.prompt(`Pull request title (${info.editBranch} → ${info.defaultBranch})`);
+    if (!title?.trim()) return;
+    setBusy("pr");
+    try {
+      const pr = await apiFetch<{ url: string; number: number; existing: boolean }>("/api/workspace/pull-request", { method: "POST", body: { title: title.trim() } });
+      setNotice({ tone: "ok", text: `${pr.existing ? "Pull request already open" : "Opened pull request"} #${pr.number}: ${pr.url}` });
+    } catch (err) {
+      setNotice({ tone: "error", text: errorMessage(err) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runCypher = async () => {
     setRunningCypher(true);
-    setCypherOutput(null);
     try {
-      const res = await fetch("/api/graph/cypher", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cypher: cypherQuery }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setCypherOutput(JSON.stringify(data, null, 2));
-      } else {
-        const err = await res.json().catch(() => ({ error: "Query failed" }));
-        setCypherOutput(JSON.stringify(err, null, 2));
-      }
-    } catch (e) {
-      setCypherOutput(JSON.stringify({ error: e instanceof Error ? e.message : "Cypher error" }, null, 2));
+      const r = await apiFetch<{ rows: unknown[]; durationMs: number; cypher: string }>("/api/graph/cypher", { method: "POST", body: { cypher } });
+      setCypherOut(`// ${r.rows.length} rows · ${r.durationMs}ms\n${JSON.stringify(r.rows, null, 2)}`);
+    } catch (err) {
+      setCypherOut(`// ${errorMessage(err)}`);
     } finally {
       setRunningCypher(false);
     }
   };
 
+  const dirty = open ? open.content !== (open.draft?.content ?? open.original) : false;
+
   return (
     <div className="flex h-full flex-col overflow-hidden bg-bg font-sans text-fg">
-      {/* Top IDE Toolbar */}
-      <div className="flex h-11 items-center justify-between border-b border-line bg-surface-1 px-4">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 font-mono text-[12px] text-fg-2">
-            <GitBranch className="size-3.5 text-accent" />
-            <select
-              value={branch}
-              onChange={(e) => setBranch(e.target.value)}
-              className="rounded border border-line bg-surface-2 px-2.5 py-1 font-mono text-[11.5px] text-fg focus:border-accent focus:outline-none"
-            >
-              <option value="agent-b/receipt-emails">agent-b/receipt-emails (Current)</option>
-              <option value="agent-a/rename-user-email">agent-a/rename-user-email</option>
-              <option value="main">main (Protected)</option>
-            </select>
-          </div>
+      <div className="flex h-11 items-center justify-between gap-3 border-b border-line bg-surface-1 px-4">
+        <div className="flex min-w-0 items-center gap-3 font-mono text-[11.5px]">
+          <span className="truncate text-fg-2">{info.repository}</span>
           <span className="h-4 w-px bg-line-strong" />
-          <span className="font-mono text-[11.5px] text-fg-3">acme/checkout-service</span>
+          <GitBranch className="size-3.5 shrink-0 text-accent" />
+          <select
+            value={branch}
+            onChange={(e) => {
+              setBranch(e.target.value);
+              setOpen(null);
+            }}
+            aria-label="Branch"
+            className="rounded border border-line bg-surface-2 px-2.5 py-1 text-fg focus:border-accent focus:outline-none"
+          >
+            {info.branches.map((b) => (
+              <option key={b.name} value={b.name}>
+                {b.name}
+                {b.name === info.defaultBranch ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
+          <span className="hidden text-fg-3 xl:inline">commits go to {info.editBranch}</span>
         </div>
-
-        <div className="flex items-center gap-2.5">
-          {saveStatus && (
-            <span className="flex items-center gap-1 font-mono text-[11px] text-pass">
-              <Check className="size-3" /> {saveStatus}
-            </span>
-          )}
-          <Button size="sm" variant="ghost" onClick={handleSave} className="gap-1.5">
-            <Save className="size-3.5" /> Save
-          </Button>
-          <Button size="sm" variant="primary" onClick={handleSave} className="gap-1.5">
-            <GitCommit className="size-3.5 text-accent-ink" /> Commit to Branch
-          </Button>
-        </div>
+        <Button size="sm" variant="ghost" onClick={() => void openPullRequest()} disabled={busy === "pr"} className="shrink-0 gap-1.5">
+          <GitPullRequest className="size-3.5" /> {busy === "pr" ? "Opening…" : "Open pull request"}
+        </Button>
       </div>
 
-      {/* Main Split: File Tree + Editor + Bottom Runner */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* File Explorer (Left sidebar) */}
-        <aside className="w-60 flex-shrink-0 border-r border-line bg-surface-1/70 p-3 font-mono text-[12px]">
-          <div className="mb-2 flex items-center justify-between px-2 font-mono text-[10.5px] uppercase tracking-wider text-fg-3">
-            <span>Explorer</span>
-            <span>TS</span>
-          </div>
+      {notice && (
+        <div className="px-4 pt-3">
+          <NoticeBar notice={notice} onDismiss={() => setNotice(null)} />
+        </div>
+      )}
 
-          <div className="space-y-1">
-            {fileList.map((f) => {
-              const active = f.path === activeFile.path;
-              return (
-                <button
-                  key={f.path}
-                  onClick={() => void handleSelectFile(f.path)}
-                  className={`flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-[11.5px] transition-colors ${
-                    active
-                      ? "bg-surface-3 font-medium text-accent"
-                      : "text-fg-2 hover:bg-surface-2 hover:text-fg"
-                  }`}
-                >
-                  <FileCode2 className={`size-3.5 ${active ? "text-accent" : "text-fg-3"}`} />
-                  <span className="truncate">{f.path}</span>
-                </button>
-              );
-            })}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <aside className="flex w-64 shrink-0 flex-col border-r border-line bg-surface-1/70 font-mono text-[12px]">
+          <div className="p-3 pb-2">
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter files…"
+              aria-label="Filter files"
+              className="w-full rounded border border-line bg-surface-2 px-2.5 py-1.5 text-[11.5px] text-fg focus:border-accent focus:outline-none"
+            />
           </div>
-
-          <div className="mt-6 rounded border border-line/50 bg-surface-2/40 p-2.5 text-[11px] leading-relaxed text-fg-3">
-            <span className="block font-medium text-fg-2">Collaborative Draft Sync</span>
-            Edits made in this branch automatically undergo Graph AST checks before PR creation.
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+            {files.state.status === "loading" && <p className="px-2 text-[11px] text-fg-3">Loading files…</p>}
+            {files.state.status === "error" && <p className="px-2 text-[11px] text-conflict">{files.state.error.message}</p>}
+            {files.state.status === "ready" && visible.length === 0 && <p className="px-2 text-[11px] text-fg-3">No matching files.</p>}
+            {visible.map((f) => (
+              <button
+                key={f.path}
+                onClick={() => void openFile(f.path)}
+                title={f.path}
+                className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[11.5px] transition-colors ${
+                  open?.path === f.path ? "bg-surface-3 font-medium text-accent" : "text-fg-2 hover:bg-surface-2 hover:text-fg"
+                }`}
+              >
+                <FileCode2 className="size-3.5 shrink-0 text-fg-3" />
+                <span className="truncate">{opening === f.path ? "Opening…" : f.path}</span>
+              </button>
+            ))}
+            {files.state.status === "ready" && (files.state.data.truncated || files.state.data.files.length > visible.length) && (
+              <p className="mt-2 px-2 text-[10.5px] text-fg-3">Showing {visible.length} of {files.state.data.files.length} files — filter to narrow.</p>
+            )}
           </div>
         </aside>
 
-        {/* Editor & Bottom Terminal */}
-        <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
-          {/* Active File Tab Bar */}
-          <div className="flex h-9 items-center border-b border-line bg-surface-1 px-2">
-            <div className="flex items-center gap-2 border-r border-line bg-surface-2 px-3 py-1 font-mono text-[12px] text-fg">
-              <Code2 className="size-3.5 text-accent" />
-              <span>{activeFile.path}</span>
-            </div>
-          </div>
-
-          {/* Monaco Editor Container */}
-          <div className="flex-1 min-h-0">
-            <MonacoEditor
-              height="100%"
-              language={activeFile.language}
-              theme="vs-dark"
-              value={editorContent[activeFile.path] ?? ""}
-              onChange={handleEditorChange}
-              options={{
-                fontSize: 12.5,
-                fontFamily: "var(--font-mono), Consolas, monospace",
-                minimap: { enabled: false },
-                scrollBeyondLastLine: false,
-                padding: { top: 12, bottom: 12 },
-                lineNumbers: "on",
-                renderLineHighlight: "all",
-                cursorBlinking: "smooth",
-                automaticLayout: true,
-              }}
-            />
-          </div>
-
-          {/* Bottom Panel: FalkorDB Cypher Runner */}
-          <div className="h-64 flex-shrink-0 border-t border-line bg-surface-1 flex flex-col">
-            <div className="flex h-9 items-center justify-between border-b border-line px-3 bg-surface-2/60">
-              <div className="flex items-center gap-2 font-mono text-[11px]">
-                <button
-                  onClick={() => setBottomTab("cypher")}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded transition-colors ${
-                    bottomTab === "cypher" ? "bg-surface-3 text-accent font-semibold" : "text-fg-3 hover:text-fg"
-                  }`}
-                >
-                  <Database className="size-3.5" /> FalkorDB Cypher Runner
-                </button>
-                <button
-                  onClick={() => setBottomTab("terminal")}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded transition-colors ${
-                    bottomTab === "terminal" ? "bg-surface-3 text-accent font-semibold" : "text-fg-3 hover:text-fg"
-                  }`}
-                >
-                  <Terminal className="size-3.5" /> Terminal
-                </button>
-              </div>
-
-              {bottomTab === "cypher" && (
-                <Button
-                  size="sm"
-                  variant="primary"
-                  onClick={handleRunCypher}
-                  disabled={runningCypher}
-                  className="gap-1.5 h-6 text-[11px]"
-                >
-                  <Play className="size-3 text-accent-ink" />
-                  {runningCypher ? "Executing Cypher…" : "Run Cypher Query"}
-                </Button>
-              )}
-            </div>
-
-            <div className="flex-1 grid grid-cols-12 min-h-0">
-              {bottomTab === "cypher" ? (
-                <>
-                  <div className="col-span-6 border-r border-line p-2.5 flex flex-col min-h-0">
-                    <span className="font-mono text-[10.5px] uppercase text-fg-3 mb-1">Cypher Query</span>
-                    <textarea
-                      value={cypherQuery}
-                      onChange={(e) => setCypherQuery(e.target.value)}
-                      rows={5}
-                      className="flex-1 w-full rounded border border-line bg-surface-2 p-2 font-mono text-[11.5px] text-accent focus:outline-none"
-                    />
-                  </div>
-                  <div className="col-span-6 p-2.5 flex flex-col min-h-0 bg-surface-2/40">
-                    <span className="font-mono text-[10.5px] uppercase text-fg-3 mb-1">Graph Result (FalkorDB AST)</span>
-                    <pre className="flex-1 overflow-auto rounded border border-line/60 bg-surface-1 p-2 font-mono text-[11px] text-fg-2">
-                      {cypherOutput ?? "// Click 'Run Cypher Query' to execute query against FalkorDB engine"}
-                    </pre>
-                  </div>
-                </>
-              ) : (
-                <div className="col-span-12 p-3 font-mono text-[11.5px] text-fg-2 space-y-1">
-                  <p className="text-accent">$ git status</p>
-                  <p>On branch agent-b/receipt-emails</p>
-                  <p>Your branch is up to date with &apos;origin/agent-b/receipt-emails&apos;.</p>
-                  <p className="text-pass">✓ AST contract guard verified: 0 conflicting changes</p>
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          {open ? (
+            <>
+              <div className="flex h-10 items-center justify-between gap-3 border-b border-line bg-surface-1 px-3">
+                <div className="flex min-w-0 items-center gap-2 font-mono text-[12px] text-fg">
+                  <Code2 className="size-3.5 shrink-0 text-accent" />
+                  <span className="truncate">{open.path}</span>
+                  {dirty && <span className="text-risk">●</span>}
+                  {open.draft && open.content !== open.draft.content && (
+                    <button onClick={() => setOpen({ ...open, content: open.draft!.content })} className="shrink-0 text-[11px] text-accent hover:underline">
+                      load saved draft v{open.draft.version}
+                    </button>
+                  )}
                 </div>
-              )}
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => void saveDraft()} disabled={busy === "draft"} className="gap-1.5">
+                    <Save className="size-3.5" /> {busy === "draft" ? "Saving…" : "Save draft"}
+                  </Button>
+                  <form
+                    className="flex items-center gap-1.5"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void commit();
+                    }}
+                  >
+                    <input
+                      value={commitMessage}
+                      onChange={(e) => setCommitMessage(e.target.value)}
+                      placeholder="Commit message"
+                      aria-label="Commit message"
+                      required
+                      className="h-7 w-48 rounded border border-line bg-surface-2 px-2 font-mono text-[11.5px] text-fg focus:border-accent focus:outline-none"
+                    />
+                    <Button size="sm" variant="primary" type="submit" disabled={busy === "commit"} className="gap-1.5">
+                      <GitCommit className="size-3.5 text-accent-ink" /> {busy === "commit" ? "Committing…" : "Commit"}
+                    </Button>
+                  </form>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1">
+                <MonacoEditor
+                  height="100%"
+                  language={languageOf(open.path)}
+                  theme="vs-dark"
+                  value={open.content}
+                  onChange={(v) => v !== undefined && setOpen((o) => (o ? { ...o, content: v } : o))}
+                  options={{ fontSize: 12.5, minimap: { enabled: false }, scrollBeyondLastLine: false, padding: { top: 12, bottom: 12 }, automaticLayout: true }}
+                />
+              </div>
+            </>
+          ) : (
+            <EmptyState icon={<FileCode2 size={16} strokeWidth={1.5} />} title="Open a file" body={`Pick a file from ${branch} to view and edit it.`} />
+          )}
+
+          <div className="flex h-60 shrink-0 flex-col border-t border-line bg-surface-1">
+            <div className="flex h-9 items-center justify-between border-b border-line bg-surface-2/60 px-3">
+              <span className="flex items-center gap-1.5 font-mono text-[11px] font-semibold text-accent">
+                <Database className="size-3.5" /> Cypher (read-only, this workspace&apos;s graph)
+              </span>
+              <Button size="sm" variant="primary" onClick={() => void runCypher()} disabled={runningCypher} className="h-6 gap-1.5 text-[11px]">
+                <Play className="size-3 text-accent-ink" /> {runningCypher ? "Running…" : "Run"}
+              </Button>
+            </div>
+            <div className="grid min-h-0 flex-1 grid-cols-2">
+              <textarea
+                value={cypher}
+                onChange={(e) => setCypher(e.target.value)}
+                aria-label="Cypher query"
+                spellCheck={false}
+                className="resize-none border-r border-line bg-surface-2 p-2.5 font-mono text-[11.5px] text-accent focus:outline-none"
+              />
+              <pre className="overflow-auto bg-surface-1 p-2.5 font-mono text-[11px] text-fg-2">{cypherOut ?? "// Run a query to see rows from FalkorDB"}</pre>
             </div>
           </div>
         </div>

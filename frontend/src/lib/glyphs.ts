@@ -31,6 +31,13 @@ export function glyphD(kind: NodeKind, r: number): string {
     }
     case "incident": // octagon
       return poly(8, Math.PI / 8, r * 1.05);
+    case "file": {
+      // page with a folded corner
+      const w = r * 0.78, h = r, k = r * 0.42;
+      return `M${f(-w)} ${f(-h)}H${f(w - k)}L${f(w)} ${f(-h + k)}V${f(h)}H${f(-w)}Z`;
+    }
+    case "issue": // pentagon
+      return poly(5, -Math.PI / 2, r * 1.05);
   }
 }
 
@@ -40,6 +47,8 @@ export const NODE_KIND_LABEL: Record<NodeKind, string> = {
   field: "Field",
   function: "Function",
   test: "Test",
-  change: "Proposed change",
-  incident: "Incident",
+  change: "Change",
+  incident: "Conflict",
+  file: "File",
+  issue: "Issue",
 };

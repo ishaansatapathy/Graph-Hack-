@@ -1,291 +1,178 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { AlertTriangle, Check, CheckCircle2, ChevronRight, FileCode2, GitBranch, GitCommit, RefreshCw, Save, ShieldAlert, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { CheckCircle2, FileCode2, GitBranch, GitCommit, RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/state";
+import { apiFetch, errorMessage, useResource, ViewError, ViewLoading, type OpenTab } from "./shared";
 
-interface ConflictHop {
-  node: string;
-  label: string;
-  annotation: string;
-}
-
-interface ConflictItem {
+interface Conflict {
   id: string;
   file: string;
   authorA: string;
-  roleA: string;
-  branchA: string;
   commitShaA: string;
   messageA: string;
+  branchA: string;
   authorB: string;
-  roleB: string;
-  branchB: string;
   commitShaB: string;
   messageB: string;
-  status: string;
-  evidence: string;
-  authorScopeWarning: {
-    flagged: boolean;
-    severity: string;
-    reason: string;
-  };
-  hops: ConflictHop[];
-  cypher: string;
+  branchB: string;
+  evidence?: "overlapping_hunks" | "diff_unavailable";
+  overlappingLines?: string[];
+  patchA?: string;
+  patchB?: string;
+  source: "commits" | "import";
 }
 
-interface Resolution {
-  id: string;
-  targetFile: string;
-  authorScopeProtected: boolean;
-  model: string;
+interface Review {
   suggestion: string;
-  reverifyTests: string[];
+  model: string;
+  rateLimited: boolean;
+  graphContextUsed: boolean;
 }
 
-export function ConflictsView() {
-  const [conflicts, setConflicts] = useState<ConflictItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [resolving, setResolving] = useState(false);
-  const [resolution, setResolution] = useState<Resolution | null>(null);
-  const [applying, setApplying] = useState(false);
-  const [applyStatus, setApplyStatus] = useState<string | null>(null);
+type ReviewState = { status: "loading" } | { status: "done"; review: Review } | { status: "error"; message: string };
 
-  const loadConflicts = async () => {
+export function ConflictsView({ onOpenTab }: { onOpenTab?: OpenTab }) {
+  const { state, reload } = useResource<{ conflicts: Conflict[] }>("/api/conflicts");
+  const [reviews, setReviews] = useState<Record<string, ReviewState>>({});
+
+  if (state.status === "loading") return <ViewLoading label="Checking the workspace graph for conflicts…" />;
+  if (state.status === "error") return <ViewError title="Couldn't load conflicts" error={state.error} onRetry={() => reload(false)} />;
+
+  const { conflicts } = state.data;
+
+  const review = async (c: Conflict) => {
+    setReviews((r) => ({ ...r, [c.id]: { status: "loading" } }));
     try {
-      const res = await fetch("/api/conflicts");
-      if (res.ok) {
-        const json = await res.json();
-        setConflicts((json.conflicts ?? []) as ConflictItem[]);
-      }
-    } catch {
-      // fallback
-    } finally {
-      setLoading(false);
+      const result = await apiFetch<Review>(`/api/conflicts/${encodeURIComponent(c.id)}/resolve`, { method: "POST", body: {} });
+      setReviews((r) => ({ ...r, [c.id]: { status: "done", review: result } }));
+    } catch (err) {
+      setReviews((r) => ({ ...r, [c.id]: { status: "error", message: errorMessage(err) } }));
     }
   };
-
-  useEffect(() => {
-    void loadConflicts();
-  }, []);
-
-  const handleResolve = async (conflictId: string) => {
-    setResolving(true);
-    try {
-      const res = await fetch(`/api/conflicts/${conflictId}/resolve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setResolution(json.resolution as Resolution);
-      }
-    } finally {
-      setResolving(false);
-    }
-  };
-
-  const handleApplyFix = async () => {
-    if (!resolution) return;
-    setApplying(true);
-    setApplyStatus(null);
-    try {
-      const res = await fetch("/api/workspace/files/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path: resolution.targetFile,
-          content: resolution.suggestion,
-        }),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setApplyStatus(json.message ?? "Applied to workspace working tree & Neon PostgreSQL");
-      } else {
-        setApplyStatus("Failed to apply fix");
-      }
-    } catch {
-      setApplyStatus("Error applying fix");
-    } finally {
-      setApplying(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center bg-bg font-mono text-[12px] text-fg-3">
-        <RefreshCw className="mr-2 size-4 animate-spin text-accent" /> Scanning FalkorDB for cross-branch AST contract drifts…
-      </div>
-    );
-  }
-
-  const conflict = conflicts[0];
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-bg p-6 font-sans text-fg">
-      {/* Header */}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-line pb-4">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-[17px] font-semibold text-fg">GraphRAG AST Conflict Resolver</h1>
-            <span className="rounded border border-conflict/30 bg-conflict/10 px-2 py-0.5 font-mono text-[11px] text-conflict">
-              Semantic Drift Detected
-            </span>
+            <h1 className="text-[17px] font-semibold text-fg">Conflicts</h1>
+            {conflicts.length > 0 && (
+              <span className="rounded border border-conflict/30 bg-conflict/10 px-2 py-0.5 font-mono text-[11px] text-conflict">{conflicts.length} open</span>
+            )}
           </div>
           <p className="mt-1 text-[13px] text-fg-2">
-            FalkorDB isolates multi-hop contract breaks between concurrent agent branches before merge into main.
+            Files changed on two branches since they diverged. With GitHub connected, pushed-commit candidates are kept only when their diffs overlap.
           </p>
         </div>
-
-        {conflict && !resolution && (
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => void handleResolve(conflict.id)}
-            disabled={resolving}
-            className="gap-2"
-          >
-            {resolving ? <RefreshCw className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-accent-ink" />}
-            Resolve with GraphRAG AI
-          </Button>
-        )}
+        <Button size="sm" variant="ghost" onClick={() => reload()} className="gap-2">
+          <RefreshCw className="size-3.5" /> Refresh
+        </Button>
       </div>
 
-      {conflict ? (
-        <div className="space-y-6">
-          {/* Author Scope Warning Card */}
-          {conflict.authorScopeWarning?.flagged && (
-            <div className="rounded-lg border border-conflict/40 bg-conflict/10 p-4">
-              <div className="flex items-start gap-3">
-                <ShieldAlert className="mt-0.5 size-5 flex-shrink-0 text-conflict" />
-                <div>
-                  <h3 className="font-mono text-[12.5px] font-semibold text-conflict uppercase tracking-wider">
-                    Author Role Scope Warning · High Severity
-                  </h3>
-                  <p className="mt-1 text-[13px] leading-relaxed text-fg-2">
-                    {conflict.authorScopeWarning.reason}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Conflict Meta Comparison */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {/* Agent A Card */}
-            <div className="rounded-lg border border-line bg-surface-1 p-4">
-              <div className="mb-2 flex items-center justify-between border-b border-line pb-2 font-mono text-[11px]">
-                <span className="font-semibold text-accent">{conflict.authorA} ({conflict.roleA})</span>
-                <span className="flex items-center gap-1 text-fg-3">
-                  <GitCommit className="size-3" /> {conflict.commitShaA}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-[12px] text-fg-2">
-                <GitBranch className="size-3.5 text-accent" />
-                <span>{conflict.branchA}</span>
-              </div>
-              <p className="mt-2 text-[12.5px] text-fg">{conflict.messageA}</p>
-            </div>
-
-            {/* Agent B Card */}
-            <div className="rounded-lg border border-line bg-surface-1 p-4">
-              <div className="mb-2 flex items-center justify-between border-b border-line pb-2 font-mono text-[11px]">
-                <span className="font-semibold text-pink-400">{conflict.authorB} ({conflict.roleB})</span>
-                <span className="flex items-center gap-1 text-fg-3">
-                  <GitCommit className="size-3" /> {conflict.commitShaB}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 font-mono text-[12px] text-fg-2">
-                <GitBranch className="size-3.5 text-pink-400" />
-                <span>{conflict.branchB}</span>
-              </div>
-              <p className="mt-2 text-[12.5px] text-fg">{conflict.messageB}</p>
-            </div>
-          </div>
-
-          {/* 6-Hop Graph Traversal */}
-          <div className="rounded-lg border border-line bg-surface-1 p-5">
-            <h3 className="mb-3 font-mono text-[11px] uppercase tracking-wider text-fg-3">
-              FalkorDB 6-Hop AST Dependency Chain
-            </h3>
-            <div className="flex flex-wrap items-center gap-2">
-              {conflict.hops.map((hop, i) => (
-                <div key={hop.node} className="flex items-center gap-2">
-                  <div className="rounded border border-line bg-surface-2 px-3 py-2 font-mono text-[11.5px]">
-                    <div className="font-bold text-accent">{hop.label}</div>
-                    <div className="text-[10px] text-fg-3">{hop.annotation}</div>
-                  </div>
-                  {i < conflict.hops.length - 1 && <ChevronRight className="size-4 text-fg-3" />}
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-4 border-t border-line/60 pt-3">
-              <span className="font-mono text-[10.5px] uppercase tracking-wider text-fg-3">Cypher Query</span>
-              <pre className="mt-1 overflow-x-auto rounded bg-surface-2 p-2.5 font-mono text-[11px] text-fg-2">
-                {conflict.cypher}
-              </pre>
-            </div>
-          </div>
-
-          {/* AI Resolution Result */}
-          {resolution && (
-            <div className="rounded-lg border border-pass/40 bg-pass/5 p-5">
-              <div className="mb-3 flex items-center justify-between border-b border-line/60 pb-3">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="size-5 text-pass" />
-                  <h3 className="text-[14px] font-semibold text-fg">GraphRAG AI Resolution ({resolution.id})</h3>
-                </div>
-                <span className="font-mono text-[11px] text-pass">✓ Author Scope Respected</span>
-              </div>
-
-              <div className="mb-3 flex items-center gap-2 font-mono text-[12px] text-fg-2">
-                <FileCode2 className="size-4 text-accent" />
-                <span>Target File: <strong>{resolution.targetFile}</strong></span>
-                <span className="text-fg-3">({resolution.model})</span>
-              </div>
-
-              <pre className="overflow-x-auto rounded border border-line bg-surface-1 p-3 font-mono text-[11.5px] leading-relaxed text-pass">
-                {resolution.suggestion}
-              </pre>
-
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line/60 pt-3">
-                <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-fg-2">
-                  <span>Targeted Unit & Contract Tests:</span>
-                  {resolution.reverifyTests.map((t) => (
-                    <span key={t} className="rounded bg-pass/10 px-2 py-0.5 text-pass">
-                      ✓ {t} pass
-                    </span>
-                  ))}
-                </div>
-
-                <div className="flex items-center gap-3">
-                  {applyStatus && (
-                    <span className="flex items-center gap-1.5 font-mono text-[11.5px] text-pass">
-                      <Check className="size-3.5" /> {applyStatus}
-                    </span>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={() => void handleApplyFix()}
-                    disabled={applying}
-                    className="gap-2"
-                  >
-                    {applying ? <RefreshCw className="size-3.5 animate-spin" /> : <Save className="size-3.5 text-accent-ink" />}
-                    Apply Fix to IDE Working Tree
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
+      {conflicts.length === 0 ? (
+        <div className="rounded-lg border border-line bg-surface-1">
+          <EmptyState
+            icon={<CheckCircle2 size={16} strokeWidth={1.5} className="text-pass" />}
+            title="No open conflicts"
+            body="Conflicts appear when two branches change the same file — from a repository import in Studio or from GitHub push webhooks."
+            action={
+              onOpenTab && (
+                <Button size="sm" onClick={() => onOpenTab("studio")}>
+                  Import a repository in Studio
+                </Button>
+              )
+            }
+          />
         </div>
       ) : (
-        <div className="flex h-64 flex-col items-center justify-center text-fg-3 font-mono text-[12px]">
-          <CheckCircle2 className="size-6 text-pass mb-2" />
-          No open AST conflicts detected across branches.
+        <div className="space-y-6">
+          {conflicts.map((c) => {
+            const r = reviews[c.id];
+            return (
+              <article key={c.id} className="rounded-lg border border-line bg-surface-1 p-5">
+                <header className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+                  <div className="flex min-w-0 items-center gap-2 font-mono text-[12.5px]">
+                    <FileCode2 className="size-4 shrink-0 text-conflict" />
+                    <span className="truncate text-fg">{c.file}</span>
+                    <span className="rounded bg-surface-2 px-1.5 text-[10px] uppercase text-fg-3">{c.source === "import" ? "repo import" : "pushed commits"}</span>
+                  </div>
+                  <Button size="sm" variant="primary" onClick={() => void review(c)} disabled={r?.status === "loading"} className="gap-2">
+                    {r?.status === "loading" ? <RefreshCw className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5 text-accent-ink" />}
+                    {r?.status === "done" ? "Review again" : "Review with AI"}
+                  </Button>
+                </header>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <Side branch={c.branchA} author={c.authorA} sha={c.commitShaA} message={c.messageA} tone="text-accent" />
+                  <Side branch={c.branchB} author={c.authorB} sha={c.commitShaB} message={c.messageB} tone="text-agent-b" />
+                </div>
+
+                <div className="mt-4 font-mono text-[11.5px] text-fg-2">
+                  {c.evidence === "overlapping_hunks" ? (
+                    <p>
+                      <span className="text-conflict">Overlapping edits:</span> {c.overlappingLines?.join(", ")}
+                    </p>
+                  ) : (
+                    <p className="text-fg-3">
+                      Line-level evidence unavailable{c.source === "import" ? " for imported branches" : " — connect GitHub with the repository to compare diffs"}.
+                    </p>
+                  )}
+                </div>
+
+                {(c.patchA || c.patchB) && (
+                  <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    {[c.patchA, c.patchB].map((patch, i) =>
+                      patch ? (
+                        <pre key={i} className="max-h-64 overflow-auto rounded border border-line bg-surface-2 p-2.5 font-mono text-[11px] leading-relaxed text-fg-2">
+                          {patch}
+                        </pre>
+                      ) : null,
+                    )}
+                  </div>
+                )}
+
+                {r?.status === "error" && <p className="mt-4 font-mono text-[12px] text-conflict">{r.message}</p>}
+                {r?.status === "done" && (
+                  <div className="mt-4 rounded-lg border border-accent/30 bg-accent/5 p-4">
+                    <div className="mb-2 flex items-center justify-between font-mono text-[11px] text-fg-3">
+                      <span className="text-accent">AI review · {r.review.model}</span>
+                      <span>{r.review.graphContextUsed ? "used graph context" : "no graph context found"}</span>
+                    </div>
+                    {r.review.rateLimited ? (
+                      <p className="text-[12.5px] text-risk">The AI provider rate-limited this request. Try again shortly.</p>
+                    ) : (
+                      <p className="whitespace-pre-wrap text-[12.5px] leading-relaxed text-fg">{r.review.suggestion}</p>
+                    )}
+                    <p className="mt-3 text-[11px] text-fg-3">Advice only — nothing was changed, merged, or tested.</p>
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
       )}
+    </div>
+  );
+}
+
+function Side({ branch, author, sha, message, tone }: { branch: string; author: string; sha: string; message: string; tone: string }) {
+  return (
+    <div className="rounded-lg border border-line bg-surface-2/50 p-4">
+      <div className="mb-2 flex items-center justify-between gap-2 border-b border-line pb-2 font-mono text-[11px]">
+        <span className={`flex min-w-0 items-center gap-1.5 ${tone}`}>
+          <GitBranch className="size-3.5 shrink-0" />
+          <span className="truncate">{branch || "unknown branch"}</span>
+        </span>
+        {sha && (
+          <span className="flex shrink-0 items-center gap-1 text-fg-3">
+            <GitCommit className="size-3" /> {sha}
+          </span>
+        )}
+      </div>
+      {author && <p className="font-mono text-[11px] text-fg-3">{author}</p>}
+      {message && <p className="mt-1 text-[12.5px] text-fg">{message}</p>}
     </div>
   );
 }
