@@ -1,15 +1,13 @@
 import {
   agentMemory,
+  answerWorkspaceQuestion,
   assertWorkspaceMember,
   checkDeviceQuota,
   checkDatabaseHealth,
   checkFalkorDbConnection,
-  completeWithGraphContext,
   detectConflicts,
   fileInsight,
-  graphChunks,
   graphEngine,
-  graphRagAnswer,
   resolveConflict,
   scanGithubConflicts,
   syncDb,
@@ -107,55 +105,7 @@ export const graphRouter = router({
           });
         }
 
-        // 2. Persist user turn to memory
-        await agentMemory.appendMessage(input.workspaceId, ctx.user.id, "user", input.question);
-
-        // 3. Graph traversal context (keyword-based, no vector store)
-        const ragResult = await graphRagAnswer(input.workspaceId, input.question);
-
-        // 4. Chunk search context (FalkorDB chunk nodes)
-        const keywords = input.question
-          .toLowerCase()
-          .split(/[\s,.:;?!()\[\]{}'"`]+/)
-          .filter((w) => w.length > 2)
-          .slice(0, 6);
-        const chunkHits = await graphChunks.searchChunks(input.workspaceId, keywords, 6);
-        const chunkContext = graphChunks.formatChunkContext(chunkHits);
-
-        const fullGraphContext = [
-          ragResult.answer,
-          chunkContext ? `\n\n### Additional chunk context:\n${chunkContext}` : "",
-        ]
-          .filter(Boolean)
-          .join("");
-
-        // 5. Get conversation memory for this user
-        const thread = await agentMemory.getThread(input.workspaceId, ctx.user.id);
-        const memoryMessages: Message[] = thread
-          .slice(-8)
-          .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
-
-        // 6. AI completion with graph context + memory
-        const aiResult = await completeWithGraphContext({
-          workspaceId: input.workspaceId,
-          userId: ctx.user.id,
-          question: input.question,
-          graphContext: fullGraphContext,
-          memoryThread: memoryMessages,
-        });
-
-        // 7. Persist assistant answer to memory
-        await agentMemory.appendMessage(input.workspaceId, ctx.user.id, "assistant", aiResult.content);
-
-        return {
-          answer: aiResult.content,
-          model: aiResult.model,
-          complexity: aiResult.complexity,
-          rateLimited: aiResult.rateLimited,
-          cypher: ragResult.cypher,
-          evidenceCount: ragResult.evidenceCount + chunkHits.length,
-          chunkCount: chunkHits.length,
-        };
+        return await answerWorkspaceQuestion(input.workspaceId, ctx.user.id, input.question);
       } catch (error) {
         mapServiceError(error);
       }

@@ -7,6 +7,7 @@ import { EmptyState, Skeleton } from "@/components/ui/state";
 import { AGENT_STYLE, STATUS_STYLE } from "@/lib/agents";
 import { cn } from "@/lib/cn";
 import type { Agent, ChangeStatus, Incident, ProposedChange } from "@/lib/types";
+import { AskGraph } from "./AskGraph";
 
 const CHANGE_STATUS: Record<ChangeStatus, { label: string; text: string }> = {
   pending: { label: "pending", text: "text-fg-3" },
@@ -68,6 +69,8 @@ export function AgentsRail({
             />
           ))}
         </div>
+
+        <AskGraph />
 
         <div className="border-t border-line">
           <div className="flex h-10 items-center gap-2 px-4">

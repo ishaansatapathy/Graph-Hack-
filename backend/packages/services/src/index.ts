@@ -24,6 +24,7 @@ export { githubWebhookUrl, getApiPublicUrl } from "./integrations/config";
 export * as graphEngine from "./graph/engine";
 export { graphRagAnswer } from "./graph/rag";
 export { fileInsight } from "./graph/advanced";
+export { answerWorkspaceQuestion, type WorkspaceAnswer } from "./graph/ask";
 export * as agentMemory from "./graph/memory";
 export * as graphChunks from "./graph/chunks";
 export { isGraphEngineActive, checkFalkorDbConnection } from "./graph/falkordb";

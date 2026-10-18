@@ -3,6 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import {
   AuthService,
+  answerWorkspaceQuestion,
   UserError,
   assertWorkspaceAdmin,
   callWorkspaceService,
@@ -291,6 +292,22 @@ platformRouter.post(
       // Read-only guard violations and Cypher syntax errors are about the user's query.
       throw new UserError(error instanceof Error ? error.message : "Query failed");
     }
+  }),
+);
+
+// ── Graph: GraphRAG question answering ───────────────────────────────────────
+
+platformRouter.post(
+  "/api/graph/ask",
+  route(async (req, { user, workspaceId }) => {
+    const { question } = z.object({ question: z.string().trim().min(1, "Ask a question").max(1000) }).parse(req.body ?? {});
+    const quota = await checkDeviceQuota(null, user.id);
+    if (!quota.ok) {
+      throw new UserError(quota.reason === "device_rpd"
+        ? "Daily AI quota reached. Try again tomorrow."
+        : "Too many questions at once. Please wait a moment.");
+    }
+    return answerWorkspaceQuestion(workspaceId, user.id, question);
   }),
 );
 
