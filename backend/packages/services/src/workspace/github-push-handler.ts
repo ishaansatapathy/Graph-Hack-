@@ -5,6 +5,7 @@ import { upsertChunks } from "../graph/chunks";
 import { graphWrite } from "../graph/falkordb";
 import { redactSecrets } from "../graph/redact";
 import { normalizeJiraCloudBaseUrl, normalizeSlackWebhookUrl } from "../integrations/config";
+import { publish } from "../live/bus";
 import * as workspaceDb from "./db";
 import { decryptJson } from "./secrets";
 
@@ -156,6 +157,19 @@ async function ingestCommit(
       MERGE (c)-[:REFERENCES]->(i)
     `, { sha: commit.sha, key });
   }
+
+  const commitNode = `commit:${commit.sha}`;
+  publish(workspaceId, {
+    log: { actor: "git", kind: "action", message: `Push ${commit.sha.slice(0, 7)} on ${branch} by ${commit.author} · ${commit.message.split("\n")[0]}` },
+    patches: [
+      { op: "node", node: { id: commitNode, kind: "change", label: commit.sha.slice(0, 7), centrality: 0.4 } },
+      ...commit.files.flatMap((path) => [
+        { op: "node" as const, node: { id: `file:${path}`, kind: "file" as const, label: path.split("/").pop() || path, path, centrality: 0.2 } },
+        { op: "edge" as const, edge: { id: `${commitNode}|MODIFIES|file:${path}`, source: commitNode, target: `file:${path}`, kind: "MODIFIES" } },
+      ]),
+      { op: "pulse", nodeIds: [commitNode] },
+    ],
+  });
 
   const patches = await fetchCommitPatch(repository, commit.sha, token).catch((error) => {
     console.warn("[github] commit diff retrieval failed", error instanceof Error ? error.message : error);
