@@ -42,6 +42,7 @@ const envSchema = z.object({
   FALKORDB_HOST: z.string().optional(),
   FALKORDB_PORT: z.string().optional(),
   FALKORDB_GRAPH: z.string().optional(),
+  FALKORDB_USERNAME: z.preprocess(emptyToUndefined, z.string().optional()),
   FALKORDB_PASSWORD: z.preprocess(emptyToUndefined, z.string().optional()),
   OPENAI_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
   OPENROUTER_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),

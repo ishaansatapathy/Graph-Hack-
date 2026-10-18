@@ -5,6 +5,7 @@ import { embeddedGraphManager } from "./embedded-graph";
 
 const host = env.FALKORDB_HOST ?? process.env.FALKORDB_HOST ?? "localhost";
 const port = Number(env.FALKORDB_PORT ?? process.env.FALKORDB_PORT ?? "6379");
+const username = env.FALKORDB_USERNAME ?? process.env.FALKORDB_USERNAME;
 const password = env.FALKORDB_PASSWORD ?? process.env.FALKORDB_PASSWORD;
 const defaultGraph = env.FALKORDB_GRAPH ?? process.env.FALKORDB_GRAPH ?? "stackfox";
 
@@ -36,10 +37,11 @@ export async function checkFalkorDbConnection(): Promise<boolean> {
         FalkorDB.connect({
           host,
           port,
+          ...(username ? { username } : {}),
           ...(password ? { password } : {}),
         }),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("FalkorDB connection timeout")), 1200),
+          setTimeout(() => reject(new Error("FalkorDB connection timeout")), 5000),
         ),
       ]);
     }

@@ -28,6 +28,8 @@ services:
       - key: FALKORDB_PORT
         value: "6379"
       # Required for FalkorDB Cloud; leave empty for the private stackfox-falkordb service.
+      - key: FALKORDB_USERNAME
+        sync: false
       - key: FALKORDB_PASSWORD
         sync: false
       - key: DATABASE_URL
