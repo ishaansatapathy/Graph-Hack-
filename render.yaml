@@ -27,6 +27,9 @@ services:
         fromService: { type: pserv, name: stackfox-falkordb, property: host }
       - key: FALKORDB_PORT
         value: "6379"
+      # Required for FalkorDB Cloud; leave empty for the private stackfox-falkordb service.
+      - key: FALKORDB_PASSWORD
+        sync: false
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
