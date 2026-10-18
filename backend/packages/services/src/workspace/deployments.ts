@@ -179,12 +179,14 @@ function requestHttps(
     try {
       const address = await resolvePublicAddress(url.hostname);
       const normalizedHost = url.hostname.replace(/^\[|\]$/g, "");
-      const lookupPinned = ((hostname: string, _options: unknown, callback: (error: NodeJS.ErrnoException | null, address: string, family: number) => void) => {
+      // Node (>= 20, autoSelectFamily) asks with { all: true } and then expects an address list.
+      const lookupPinned = ((hostname: string, options: { all?: boolean } | undefined, callback: (error: NodeJS.ErrnoException | null, address: string | Array<{ address: string; family: number }>, family?: number) => void) => {
         if (hostname !== normalizedHost) {
           callback(new Error("Unexpected DNS lookup host") as NodeJS.ErrnoException, "", 0);
           return;
         }
-        callback(null, address.address, address.family);
+        if (options?.all) callback(null, [{ address: address.address, family: address.family }]);
+        else callback(null, address.address, address.family);
       }) as NonNullable<https.RequestOptions["lookup"]>;
 
       const client = url.protocol === "http:" ? http : https;
