@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import * as workspaceDb from "./db";
 import * as integrationOps from "./integrations";
 import * as memberOps from "./members";
+import { UserError } from "../errors";
 
 export type WorkspacePublic = {
   id: string;
@@ -16,7 +17,22 @@ function toRole(role: string): WorkspacePublic["role"] {
   return "member";
 }
 
-export async function getOrCreateWorkspaceForUser(
+/** Concurrent first requests for a new user must not race to create two workspaces. */
+const inflight = new Map<string, Promise<WorkspacePublic>>();
+
+export function getOrCreateWorkspaceForUser(
+  userId: string,
+  displayName: string,
+  email?: string,
+): Promise<WorkspacePublic> {
+  const pending = inflight.get(userId);
+  if (pending) return pending;
+  const p = resolveOrCreateWorkspace(userId, displayName, email).finally(() => inflight.delete(userId));
+  inflight.set(userId, p);
+  return p;
+}
+
+async function resolveOrCreateWorkspace(
   userId: string,
   displayName: string,
   email?: string,
@@ -48,8 +64,14 @@ export async function assertWorkspaceMember(workspaceId: string, userId: string)
   return role;
 }
 
+export async function assertWorkspaceAdmin(workspaceId: string, userId: string): Promise<string> {
+  const role = await assertWorkspaceMember(workspaceId, userId);
+  if (role === "member") throw new UserError("Only workspace owners and admins can manage workspace security settings", "FORBIDDEN");
+  return role;
+}
+
 export async function createApiKey(workspaceId: string, userId: string, name: string) {
-  await assertWorkspaceMember(workspaceId, userId);
+  await assertWorkspaceAdmin(workspaceId, userId);
   const trimmed = name.trim() || "API key";
   const raw = `sk_stackfox_${crypto.randomBytes(24).toString("base64url")}`;
   const prefix = raw.slice(0, 16);
@@ -66,13 +88,13 @@ export async function createApiKey(workspaceId: string, userId: string, name: st
 }
 
 export async function listApiKeys(workspaceId: string, userId: string) {
-  await assertWorkspaceMember(workspaceId, userId);
+  await assertWorkspaceAdmin(workspaceId, userId);
   const keys = await workspaceDb.listApiKeys(workspaceId);
   return keys.map((k) => ({ id: k.id, name: k.name, prefix: k.key_prefix, createdAt: k.created_at }));
 }
 
 export async function revokeApiKey(workspaceId: string, userId: string, keyId: string) {
-  await assertWorkspaceMember(workspaceId, userId);
+  await assertWorkspaceAdmin(workspaceId, userId);
   await workspaceDb.deleteApiKey(workspaceId, keyId);
   return { ok: true };
 }

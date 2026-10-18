@@ -13,6 +13,16 @@ let isFalkorDbAvailable: boolean | null = null;
 let lastCheckTime = 0;
 const CHECK_COOLDOWN_MS = 30_000;
 
+function embeddedFallbackAllowed() {
+  return process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+}
+
+function requireEmbeddedFallback() {
+  if (!embeddedFallbackAllowed()) {
+    throw new Error("FalkorDB is unavailable; embedded graph fallback is disabled in production.");
+  }
+}
+
 export async function checkFalkorDbConnection(): Promise<boolean> {
   const now = Date.now();
   if (isFalkorDbAvailable !== null && now - lastCheckTime < CHECK_COOLDOWN_MS) {
@@ -79,9 +89,11 @@ export async function graphRead(
     if (isMissingGraph(error)) return [];
     // If FalkorDB query fails, fall back to embedded store
     isFalkorDbAvailable = false;
+    requireEmbeddedFallback();
   }
 
   // Resilient High-Availability Embedded Graph Engine
+  requireEmbeddedFallback();
   const store = embeddedGraphManager.getStore(workspaceId);
   return store.query(cypher, params as Record<string, unknown>);
 }
@@ -98,9 +110,11 @@ export async function graphWrite(
     }
   } catch (error) {
     isFalkorDbAvailable = false;
+    requireEmbeddedFallback();
   }
 
   // Resilient High-Availability Embedded Graph Engine
+  requireEmbeddedFallback();
   const store = embeddedGraphManager.getStore(workspaceId);
   store.executeWrite(cypher, params as Record<string, unknown>);
   return { data: [] };
@@ -116,15 +130,17 @@ export async function deleteWorkspaceGraph(workspaceId: string) {
   } catch (error) {
     if (!isMissingGraph(error)) {
       isFalkorDbAvailable = false;
+      requireEmbeddedFallback();
     }
   }
 
+  requireEmbeddedFallback();
   embeddedGraphManager.deleteStore(workspaceId);
 }
 
 export function isGraphEngineActive(): { engine: "falkordb" | "embedded"; available: boolean } {
   return {
     engine: isFalkorDbAvailable ? "falkordb" : "embedded",
-    available: true,
+    available: isFalkorDbAvailable ?? embeddedFallbackAllowed(),
   };
 }

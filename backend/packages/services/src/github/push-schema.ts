@@ -16,6 +16,9 @@ export const githubPushPayloadSchema = z.object({
         message: z.string().optional(),
         timestamp: z.string().optional(),
         author: z.object({ name: z.string().optional(), username: z.string().optional() }).optional(),
+        added: z.array(z.string()).optional(),
+        modified: z.array(z.string()).optional(),
+        removed: z.array(z.string()).optional(),
       }),
     )
     .optional(),

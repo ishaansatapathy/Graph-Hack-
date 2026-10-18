@@ -1,4 +1,4 @@
-﻿import { Resend } from "resend";
+import { Resend } from "resend";
 
 import { env, isResendConfigured } from "../env";
 import { childLogger } from "../logger";
@@ -72,10 +72,10 @@ export async function sendInviteEmail(opts: {
   inviterName: string;
   inviteToken: string;
   role: string;
-}): Promise<void> {
+}): Promise<{ success: boolean; id?: string; error?: string }> {
   if (!isResendConfigured()) {
     log.warn({ to: opts.to }, "Resend not configured — skipping invite email");
-    return;
+    return { success: false, error: "RESEND_API_KEY is not configured in .env" };
   }
   const acceptUrl = `${env.CLIENT_URL}/invite/accept?token=${opts.inviteToken}`;
   const html = baseTemplate(
@@ -90,16 +90,22 @@ export async function sendInviteEmail(opts: {
     `${opts.inviterName} invited you to ${opts.workspaceName}`,
   );
   try {
-    const { error } = await getClient().emails.send({
+    const { data, error } = await getClient().emails.send({
       from: FROM,
       to: opts.to,
       subject: `${opts.inviterName} invited you to ${opts.workspaceName} on Stackfox`,
       html,
     });
-    if (error) log.error({ error, to: opts.to }, "Failed to send invite email");
-    else log.info({ to: opts.to, workspace: opts.workspaceName }, "Invite email sent");
+    if (error) {
+      log.error({ error, to: opts.to }, "Failed to send invite email");
+      return { success: false, error: error.message };
+    }
+    log.info({ to: opts.to, workspace: opts.workspaceName }, "Invite email sent");
+    return { success: true, id: data?.id };
   } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
     log.error({ err, to: opts.to }, "Exception sending invite email");
+    return { success: false, error: msg };
   }
 }
 

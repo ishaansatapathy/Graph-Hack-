@@ -1,5 +1,7 @@
 import {
   getApiPublicUrl,
+  claimGithubWebhookDelivery,
+  finishGithubWebhookDelivery,
   getGithubWebhookSecretForWorkspace,
   githubPushPayloadSchema,
   handleGithubPush,
@@ -37,7 +39,12 @@ githubWebhookRouter.post("/", async (req, res) => {
     return res.status(400).json({ error: "workspaceId query param required" });
   }
 
-  const secret = await getGithubWebhookSecretForWorkspace(workspaceId);
+  let secret: string;
+  try {
+    secret = await getGithubWebhookSecretForWorkspace(workspaceId);
+  } catch {
+    return res.status(503).json({ error: "Webhook configuration is temporarily unavailable" });
+  }
   if (!verifyGithubSignature(req, res, secret)) return;
 
   const event = req.headers["x-github-event"];
@@ -50,11 +57,29 @@ githubWebhookRouter.post("/", async (req, res) => {
     return res.status(400).json({ error: "Invalid push payload" });
   }
 
+  const deliveryId = req.headers["x-github-delivery"];
+  if (typeof deliveryId !== "string" || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(deliveryId)) {
+    return res.status(400).json({ error: "Valid X-GitHub-Delivery header required" });
+  }
+
+  let claim: Awaited<ReturnType<typeof claimGithubWebhookDelivery>>;
+  try {
+    claim = await claimGithubWebhookDelivery(workspaceId, deliveryId);
+  } catch {
+    // Returning 503 lets GitHub retry once the delivery store is available.
+    return res.status(503).json({ error: "Webhook delivery store is temporarily unavailable" });
+  }
+  if (!claim.claimed) {
+    return res.status(202).json({ ok: true, duplicate: true, deliveryStatus: claim.status });
+  }
+
   try {
     const result = await handleGithubPush(workspaceId, parsed.data);
+    await finishGithubWebhookDelivery(workspaceId, deliveryId, true);
     return res.status(200).json(result);
   } catch (error) {
     console.error("[github-webhook]", error);
+    await finishGithubWebhookDelivery(workspaceId, deliveryId, false).catch(() => undefined);
     return res.status(500).json({ error: "Webhook processing failed" });
   }
 });

@@ -55,8 +55,9 @@ export async function syncSlackToGraph(workspaceId: string): Promise<SlackSyncRe
   // 1. List channels
   const chanResp = await fetch(
     "https://slack.com/api/conversations.list?types=public_channel&limit=200&exclude_archived=true",
-    { headers },
+    { headers, signal: AbortSignal.timeout(15_000) },
   );
+  if (!chanResp.ok) throw new Error(`Slack conversations.list returned HTTP ${chanResp.status}`);
   const chanData = (await chanResp.json()) as { ok: boolean; channels?: SlackChannel[] };
   if (!chanData.ok || !chanData.channels) {
     throw new Error("Slack conversations.list failed — check bot token scopes (channels:read)");
@@ -77,12 +78,17 @@ export async function syncSlackToGraph(workspaceId: string): Promise<SlackSyncRe
     // Fetch history
     const histResp = await fetch(
       `https://slack.com/api/conversations.history?channel=${channel.id}&limit=${MAX_MESSAGES_PER_CHANNEL}`,
-      { headers },
+      { headers, signal: AbortSignal.timeout(15_000) },
     );
+    if (!histResp.ok) throw new Error(`Slack history request returned HTTP ${histResp.status}`);
     const histData = (await histResp.json()) as { ok: boolean; messages?: SlackMessage[] };
-    if (!histData.ok || !histData.messages) continue;
+    if (!histData.ok || !histData.messages) {
+      throw new Error(`Slack history sync failed for channel ${channel.name}`);
+    }
 
-    const teamDomain = config.teamDomain ?? "slack";
+    const teamDomain = config.teamDomain && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(config.teamDomain)
+      ? config.teamDomain
+      : "slack";
 
     for (const msg of histData.messages) {
       if (!msg.text || msg.text.trim() === "") continue;

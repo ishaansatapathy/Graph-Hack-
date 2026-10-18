@@ -15,7 +15,9 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
@@ -23,7 +25,7 @@ export const memberRoleEnum = pgEnum("member_role", ["owner", "admin", "member"]
 export const integrationProviderEnum = pgEnum("integration_provider", ["github", "jira", "slack"]);
 export const toolVisibilityEnum = pgEnum("tool_visibility", ["private", "workspace", "public"]);
 export const messageRoleEnum = pgEnum("message_role", ["user", "assistant", "system"]);
-export const syncStatusEnum = pgEnum("sync_status", ["running", "ok", "error"]);
+export const syncStatusEnum = pgEnum("sync_status", ["queued", "running", "ok", "error"]);
 
 // ── Users ─────────────────────────────────────────────────────────────────────
 
@@ -165,9 +167,14 @@ export const syncRuns = pgTable("sync_runs", {
   items: integer("items").notNull().default(0),
   message: text("message").notNull().default(""),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+  attempts: integer("attempts").notNull().default(0),
   finishedAt: timestamp("finished_at", { withTimezone: true }),
 }, (t) => [
   index("idx_syncruns_workspace_provider_date").on(t.workspaceId, t.provider, t.startedAt),
+  uniqueIndex("uq_sync_runs_workspace_provider_running")
+    .on(t.workspaceId, t.provider)
+    .where(sql`${t.status} IN ('queued', 'running')`),
 ]);
 
 // ── Device quota (fingerprint-based rate limiting) ────────────────────────────
@@ -225,3 +232,39 @@ export const conflictNotifications = pgTable("conflict_notifications", {
 }, (t) => [
   primaryKey({ columns: [t.workspaceId, t.conflictKey] }),
 ]);
+
+// Workspace-scoped API services that teammates can invoke from the workspace UI.
+export const workspaceServices = pgTable("workspace_services", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  createdByUserId: text("created_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  baseUrl: text("base_url").notNull(),
+  accessTokenEncrypted: text("access_token_encrypted"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  unique("uq_workspace_service_name").on(t.workspaceId, t.name),
+  index("idx_workspace_services_workspace").on(t.workspaceId, t.createdAt),
+]);
+
+// Workspace-level shared editor drafts; versioned writes prevent lost updates.
+export const workspaceFileDrafts = pgTable("workspace_file_drafts", {
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  path: text("path").notNull(),
+  content: text("content").notNull(),
+  version: integer("version").notNull().default(1),
+  updatedByUserId: text("updated_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ columns: [t.workspaceId, t.path] }),
+  index("idx_workspace_file_drafts_updated").on(t.workspaceId, t.updatedAt),
+]);
+
+export const githubWebhookDeliveries = pgTable("github_webhook_deliveries", {
+  deliveryId: text("delivery_id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("processing"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, (t) => [index("idx_github_deliveries_workspace_started").on(t.workspaceId, t.startedAt)]);

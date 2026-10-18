@@ -3,19 +3,20 @@ services:
     image: falkordb/falkordb:latest
     container_name: stackfox-falkordb
     ports:
-      - "6379:6379"
-      - "3001:3000"
+      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:3001:3000"
     volumes:
       - falkordb_data:/data
     restart: unless-stopped
 
-  # VS Code fork (Gitpod OpenVSCode Server) — embedded in the web app at /app/ide
+  # Local development only. Keep the editor private until it is behind the
+  # authenticated workspace proxy; OpenVSCode's connection token is enabled.
   vscode:
     image: gitpod/openvscode-server:latest
     container_name: stackfox-vscode
-    command: ["--host", "0.0.0.0", "--without-connection-token"]
+    command: ["--host", "0.0.0.0"]
     ports:
-      - "3002:3000"
+      - "127.0.0.1:3002:3000"
     volumes:
       - .:/home/workspace:cached
     restart: unless-stopped

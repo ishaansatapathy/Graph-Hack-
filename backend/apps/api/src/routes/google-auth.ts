@@ -110,6 +110,14 @@ googleAuthRouter.get("/google/callback", async (req, res) => {
 });
 
 googleAuthRouter.all("/dev-login", async (req, res) => {
+  // This endpoint creates authenticated sessions for arbitrary email addresses.
+  // It is strictly a local-development helper and must never be available in a
+  // production deployment, even if it is called directly instead of through
+  // the web app.
+  if (env.NODE_ENV === "production" || env.NODE_ENV === "prod" || env.DEV_LOGIN_ENABLED !== "true") {
+    return res.sendStatus(404);
+  }
+
   try {
     const email = (req.query.email as string) || (req.body?.email as string) || "ishaansatapathy09@gmail.com";
     const returnTo = (req.query.returnTo as string) || (req.body?.returnTo as string) || "/app";

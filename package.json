@@ -3,14 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n backend,frontend -c blue,magenta \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "dev": "npm run dev:all --prefix backend",
     "dev:backend": "npm run dev --prefix backend",
-    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:workspace": "npm run dev:all --prefix backend",
+    "dev:showcase": "npm run dev --prefix frontend",
+    "dev:frontend": "npm run dev:showcase",
+    "build": "npm run build --prefix backend",
+    "build:showcase": "npm run build --prefix frontend",
+    "start:api": "npm run start:api --prefix backend",
+    "start:web": "npm run start:web --prefix backend",
+    "db:migrate": "npm run db:migrate --prefix backend",
+    "db:check-migrations": "npm run db:check-migrations --prefix backend",
     "check-types": "npm run check-types --prefix backend && npm run check-types --prefix frontend",
     "check-types:backend": "npm run check-types --prefix backend",
     "check-types:frontend": "npm run check-types --prefix frontend"
-  },
-  "devDependencies": {
-    "concurrently": "^9.2.1"
   }
 }

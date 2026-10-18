@@ -11,6 +11,7 @@
 
 import { upsertChunks } from "../graph/chunks";
 import { graphWrite } from "../graph/falkordb";
+import { normalizeJiraCloudBaseUrl } from "../integrations/config";
 import { decryptJson } from "../workspace/secrets";
 import * as workspaceDb from "../workspace/db";
 
@@ -43,7 +44,8 @@ export async function syncJiraToGraph(workspaceId: string): Promise<JiraSyncResu
     apiToken: string;
   };
 
-  const { baseUrl, email, apiToken } = config;
+  const { email, apiToken } = config;
+  const baseUrl = normalizeJiraCloudBaseUrl(config.baseUrl);
   if (!baseUrl || !email || !apiToken) throw new Error("Incomplete Jira configuration");
 
   const basic = Buffer.from(`${email}:${apiToken}`).toString("base64");
@@ -57,10 +59,14 @@ export async function syncJiraToGraph(workspaceId: string): Promise<JiraSyncResu
     const url = `${baseUrl}/rest/api/3/search?jql=ORDER+BY+updated+DESC&maxResults=50&startAt=${startAt}&fields=summary,status,priority,assignee,labels,issuetype`;
     const resp = await fetch(url, {
       headers: { Authorization: `Basic ${basic}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
     });
     if (!resp.ok) throw new Error(`Jira search returned ${resp.status}`);
 
     const data = (await resp.json()) as { total: number; issues: JiraIssue[] };
+    if (!Array.isArray(data.issues) || (data.issues.length === 0 && startAt < data.total)) {
+      throw new Error("Jira returned an incomplete issue page; sync stopped to avoid reporting partial data as current");
+    }
     total = data.total;
 
     for (const issue of data.issues) {

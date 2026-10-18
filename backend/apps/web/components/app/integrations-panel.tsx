@@ -49,6 +49,7 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
   const [jiraBase, setJiraBase] = useState("");
   const [jiraEmail, setJiraEmail] = useState("");
   const [jiraToken, setJiraToken] = useState("");
+  const [jiraAutoTransition, setJiraAutoTransition] = useState(false);
   const [slackWebhook, setSlackWebhook] = useState("");
   const [slackBotToken, setSlackBotToken] = useState("");
   const [slackTeamDomain, setSlackTeamDomain] = useState("");
@@ -58,6 +59,8 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
     try {
       const list = await trpc.workspace.integrations.list.query({ workspaceId });
       setItems(list as IntegrationRow[]);
+      const jira = list.find((item) => item.provider === "jira");
+      setJiraAutoTransition(jira?.maskedSecrets.autoTransitionOnCommit === "true");
     } catch {
       setItems([]);
     } finally {
@@ -123,6 +126,23 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
     }
   }
 
+  async function saveJiraAutomation() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await trpc.workspace.integrations.setJiraCommitAutomation.mutate({
+        workspaceId,
+        enabled: jiraAutoTransition,
+      });
+      setMessage({ tone: "ok", text: result.message });
+      await load();
+    } catch (err) {
+      setMessage({ tone: "err", text: err instanceof Error ? err.message : "Could not save Jira automation" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function save(provider: Provider) {
     setBusy(true);
     setMessage(null);
@@ -147,6 +167,7 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
           baseUrl: jiraBase,
           email: jiraEmail,
           apiToken: jiraToken,
+          autoTransitionOnCommit: jiraAutoTransition,
         });
         setJiraToken("");
         setMessage({ tone: "ok", text: "Jira saved — click 'Sync to graph' to ingest issues" });
@@ -298,6 +319,22 @@ export function IntegrationsPanel({ workspaceId, focus }: Props) {
               onChange={(e) => setJiraToken(e.target.value)}
             />
           </label>
+          <label className="app-field" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <input
+              type="checkbox"
+              checked={jiraAutoTransition}
+              onChange={(e) => setJiraAutoTransition(e.target.checked)}
+            />
+            <span>When a commit explicitly references a Jira key, move that issue to In Progress.</span>
+          </label>
+          <button
+            type="button"
+            className="app-btn-ghost"
+            disabled={busy || !configured("jira")}
+            onClick={() => void saveJiraAutomation()}
+          >
+            Save automation setting
+          </button>
           <div className="app-row-actions">
             <button
               type="button"

@@ -1,5 +1,6 @@
 import {
   assertWorkspaceMember,
+  assertWorkspaceAdmin,
   createApiKey,
   getGithubOnboarding,
   getOrCreateWorkspaceForUser,
@@ -10,6 +11,18 @@ import {
   workspaceTools,
   workspaceMembers,
   getWorkspaceAiUsage,
+  listGithubRepositoryFiles,
+  listGithubRepositoryBranches,
+  ensureGithubEditBranch,
+  readGithubRepositoryFile,
+  saveGithubRepositoryFile,
+  createGithubPullRequest,
+  listWorkspaceServices,
+  createWorkspaceService,
+  removeWorkspaceService,
+  callWorkspaceService,
+  getWorkspaceFileDraft,
+  saveWorkspaceFileDraft,
 } from "@stackfox/services";
 import { z } from "zod";
 
@@ -199,7 +212,7 @@ export const workspaceRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         try {
-          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceAdmin(input.workspaceId, ctx.user.id);
           const result = await workspaceIntegrations.upsertGithub(input.workspaceId, input);
           return {
             message: result.webhookRegistration?.message ?? result.message,
@@ -217,14 +230,28 @@ export const workspaceRouter = router({
           baseUrl: z.string().min(8),
           email: z.string().email(),
           apiToken: z.string().min(1),
+          autoTransitionOnCommit: z.boolean().optional(),
         }),
       )
       .output(messageOutputSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceAdmin(input.workspaceId, ctx.user.id);
           await workspaceIntegrations.upsertJira(input.workspaceId, input);
           return { message: "Jira connected" };
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    setJiraCommitAutomation: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid(), enabled: z.boolean() }))
+      .output(messageOutputSchema)
+      .mutation(async ({ ctx, input }) => {
+        try {
+          await assertWorkspaceAdmin(input.workspaceId, ctx.user.id);
+          await workspaceIntegrations.setJiraCommitAutomation(input.workspaceId, input.enabled);
+          return { message: input.enabled ? "Jira commit automation enabled" : "Jira commit automation disabled" };
         } catch (error) {
           mapServiceError(error);
         }
@@ -242,7 +269,7 @@ export const workspaceRouter = router({
       .output(messageOutputSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceAdmin(input.workspaceId, ctx.user.id);
           await workspaceIntegrations.upsertSlack(input.workspaceId, input);
           return { message: "Slack connected" };
         } catch (error) {
@@ -255,7 +282,7 @@ export const workspaceRouter = router({
       .output(messageOutputSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceAdmin(input.workspaceId, ctx.user.id);
           await workspaceIntegrations.removeIntegration(input.workspaceId, input.provider);
           return { message: "Integration removed" };
         } catch (error) {
@@ -268,7 +295,7 @@ export const workspaceRouter = router({
       .output(testResultSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceAdmin(input.workspaceId, ctx.user.id);
           return await workspaceIntegrations.testGithub(input.workspaceId);
         } catch (error) {
           mapServiceError(error);
@@ -280,7 +307,7 @@ export const workspaceRouter = router({
       .output(testResultSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceAdmin(input.workspaceId, ctx.user.id);
           return await workspaceIntegrations.testJira(input.workspaceId);
         } catch (error) {
           mapServiceError(error);
@@ -292,7 +319,7 @@ export const workspaceRouter = router({
       .output(testResultSchema)
       .mutation(async ({ ctx, input }) => {
         try {
-          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceAdmin(input.workspaceId, ctx.user.id);
           return await workspaceIntegrations.testSlack(input.workspaceId);
         } catch (error) {
           mapServiceError(error);
@@ -431,6 +458,170 @@ export const workspaceRouter = router({
       .query(async ({ ctx, input }) => {
         try {
           return await workspaceTools.listAudit(input.workspaceId, ctx.user.id);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+  }),
+
+  githubFiles: router({
+    branches: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        try {
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await listGithubRepositoryBranches(input.workspaceId);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    editBranch: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid() }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await ensureGithubEditBranch(input.workspaceId, ctx.user.id);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    list: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid(), branch: z.string().max(255).optional() }))
+      .query(async ({ ctx, input }) => {
+        try {
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await listGithubRepositoryFiles(input.workspaceId, input.branch);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    read: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid(), path: z.string().min(1).max(500), branch: z.string().max(255).optional() }))
+      .query(async ({ ctx, input }) => {
+        try {
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await readGithubRepositoryFile(input.workspaceId, input.path, input.branch);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    save: protectedProcedure
+      .input(z.object({
+        workspaceId: z.string().uuid(),
+        path: z.string().min(1).max(500),
+        branch: z.string().min(1).max(255),
+        content: z.string().max(1_000_000),
+        sha: z.string().max(100).nullable(),
+        message: z.string().min(1).max(200),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await saveGithubRepositoryFile({
+            ...input,
+            userId: ctx.user.id,
+            author: { name: ctx.user.fullName, email: ctx.user.email },
+          });
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    pullRequest: protectedProcedure
+      .input(z.object({
+        workspaceId: z.string().uuid(),
+        branch: z.string().min(1).max(255),
+        title: z.string().trim().min(1).max(200),
+        body: z.string().max(5_000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          return await createGithubPullRequest({ ...input, userId: ctx.user.id });
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+  }),
+
+  fileDrafts: router({
+    get: protectedProcedure.input(z.object({
+      workspaceId: z.string().uuid(),
+      path: z.string().min(1).max(500),
+      baseContent: z.string().max(1_000_000),
+    })).query(async ({ ctx, input }) => {
+      try {
+        return await getWorkspaceFileDraft({ ...input, userId: ctx.user.id });
+      } catch (error) {
+        mapServiceError(error);
+      }
+    }),
+
+    save: protectedProcedure.input(z.object({
+      workspaceId: z.string().uuid(),
+      path: z.string().min(1).max(500),
+      content: z.string().max(1_000_000),
+      expectedVersion: z.number().int().min(0),
+    })).mutation(async ({ ctx, input }) => {
+      try {
+        return await saveWorkspaceFileDraft({ ...input, userId: ctx.user.id });
+      } catch (error) {
+        mapServiceError(error);
+      }
+    }),
+  }),
+
+  deployments: router({
+    list: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        try {
+          return await listWorkspaceServices(input.workspaceId, ctx.user.id);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    create: protectedProcedure
+      .input(z.object({
+        workspaceId: z.string().uuid(),
+        name: z.string().trim().min(1).max(80),
+        baseUrl: z.string().url().max(500),
+        accessToken: z.string().max(4_000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await createWorkspaceService({ ...input, userId: ctx.user.id });
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    remove: protectedProcedure
+      .input(z.object({ workspaceId: z.string().uuid(), serviceId: z.string().uuid() }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await removeWorkspaceService(input.workspaceId, ctx.user.id, input.serviceId);
+        } catch (error) {
+          mapServiceError(error);
+        }
+      }),
+
+    invoke: protectedProcedure
+      .input(z.object({
+        workspaceId: z.string().uuid(),
+        serviceId: z.string().uuid(),
+        method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+        path: z.string().min(1).max(2_000),
+        body: z.string().max(64 * 1024).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await callWorkspaceService({ ...input, userId: ctx.user.id });
         } catch (error) {
           mapServiceError(error);
         }

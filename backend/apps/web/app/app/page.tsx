@@ -52,9 +52,8 @@ export default function GraphAgentPage() {
   const [graph, setGraph] = useState<{ nodes: GNode[]; edges: GEdge[] }>({ nodes: [], edges: [] });
   const [selected, setSelected] = useState<GNode | null>(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
 
-  const [question, setQuestion] = useState("What is the context around verifyToken?");
+  const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [answerMeta, setAnswerMeta] = useState<{ model: string; complexity: string; chunkCount: number } | null>(null);
   const [cypher, setCypher] = useState<string[]>([]);
@@ -102,20 +101,6 @@ export default function GraphAgentPage() {
   }, [workspaceId]);
 
   const positions = useMemo(() => layout(graph.nodes), [graph.nodes]);
-
-  async function seed() {
-    if (!workspaceId) return;
-    setBusy(true);
-    try {
-      await trpc.graph.seedDemo.mutate({ workspaceId });
-      setSelected(null);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Seed failed");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function onAsk(e: React.FormEvent) {
     e.preventDefault();
@@ -196,9 +181,6 @@ export default function GraphAgentPage() {
             </span>
           ) : null}
         </div>
-        <button type="button" className="app-btn app-btn-small" disabled={busy} onClick={() => void seed()}>
-          {busy ? "Loading…" : "Load demo graph"}
-        </button>
         <button type="button" className="app-btn-ghost app-btn-small" onClick={() => void refresh()}>
           Refresh
         </button>
@@ -242,7 +224,7 @@ export default function GraphAgentPage() {
           })}
           {graph.nodes.length === 0 ? (
             <text x={W / 2} y={H / 2} textAnchor="middle" fill="#6b7280" fontSize={14}>
-              Graph is empty — click "Load demo graph" or sync an integration
+              Graph is empty. Connect an integration and sync workspace data.
             </text>
           ) : null}
         </svg>
@@ -270,7 +252,7 @@ export default function GraphAgentPage() {
       <form onSubmit={(e) => void onAsk(e)} className="app-ask-form">
         <input
           className="app-input"
-          placeholder="Ask about a function, conflict, issue… e.g. verifyToken"
+          placeholder="Ask about this workspace code, commits, issues or discussions"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
         />

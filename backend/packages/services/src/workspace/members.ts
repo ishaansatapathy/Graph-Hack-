@@ -7,6 +7,7 @@ import { findUserByEmail, findUserById, getMemberRole, insertWorkspaceMember } f
 import { sendInviteEmail, sendMemberJoinedEmail } from "../email";
 import { UserError } from "../errors";
 import { childLogger } from "../logger";
+import { recordAudit } from "./audit";
 
 const log = childLogger("members");
 
@@ -72,7 +73,10 @@ export async function inviteMember(
   emailRaw: string,
   role: "admin" | "member",
 ) {
-  await assertAdmin(workspaceId, actorId);
+  const actorRole = await assertAdmin(workspaceId, actorId);
+  if (role === "admin" && actorRole !== "owner") {
+    throw new UserError("Only the workspace owner can invite admins", "FORBIDDEN");
+  }
   const email = emailRaw.trim().toLowerCase();
   if (!email.includes("@")) throw new UserError("Enter a valid email");
 
@@ -89,6 +93,7 @@ export async function inviteMember(
     const existing = await getMemberRole(workspaceId, user.id);
     if (existing) throw new UserError("Already a member of this workspace");
     await insertWorkspaceMember({ workspace_id: workspaceId, user_id: user.id, role });
+    recordAudit(workspaceId, actorId, "member.added", null, `${user.id}:${role}`);
 
     // Notify existing workspace members that someone new joined
     const membersResult = await listMembers(workspaceId, actorId);
@@ -137,6 +142,7 @@ export async function inviteMember(
     token: inviteToken,
     expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
   });
+  recordAudit(workspaceId, actorId, "member.invited", null, `${email}:${role}`);
 
   // Fire-and-forget invite email
   void sendInviteEmail({
@@ -311,6 +317,7 @@ export async function setMemberRole(
   await db.update(schema.workspaceMembers)
     .set({ role })
     .where(and(eq(schema.workspaceMembers.workspaceId, workspaceId), eq(schema.workspaceMembers.userId, targetUserId)));
+  recordAudit(workspaceId, actorId, "member.role_changed", null, `${targetUserId}:${targetRole}->${role}`);
 
   return { ok: true };
 }
@@ -318,7 +325,12 @@ export async function setMemberRole(
 export async function removeMember(workspaceId: string, actorId: string, targetUserId: string) {
   const targetRole = await roleOf(workspaceId, targetUserId);
   if (targetRole === "owner") throw new UserError("The owner cannot be removed");
-  if (targetUserId !== actorId) await assertAdmin(workspaceId, actorId);
+  if (targetUserId !== actorId) {
+    const actorRole = await assertAdmin(workspaceId, actorId);
+    if (targetRole === "admin" && actorRole !== "owner") {
+      throw new UserError("Only the workspace owner can remove admins", "FORBIDDEN");
+    }
+  }
 
   await db.transaction(async (tx) => {
     await tx.delete(schema.workspaceMembers)

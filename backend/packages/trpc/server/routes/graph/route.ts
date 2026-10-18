@@ -2,12 +2,15 @@ import {
   agentMemory,
   assertWorkspaceMember,
   checkDeviceQuota,
+  checkDatabaseHealth,
+  checkFalkorDbConnection,
   completeWithGraphContext,
   detectConflicts,
   graphChunks,
   graphEngine,
   graphRagAnswer,
   resolveConflict,
+  scanGithubConflicts,
   syncDb,
   triggerSync,
   type Message,
@@ -21,20 +24,26 @@ const ws = z.object({ workspaceId: z.string().uuid() });
 
 /** Graph endpoints — every call is scoped to the caller's workspace graph in FalkorDB. */
 export const graphRouter = router({
-  stats: protectedProcedure.input(ws).query(async ({ ctx, input }) => {
+  status: protectedProcedure.input(ws).query(async ({ ctx, input }) => {
     try {
-      assertWorkspaceMember(input.workspaceId, ctx.user.id);
-      return await graphEngine.getGraphStats(input.workspaceId);
+      await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+      const [database, graph] = await Promise.all([
+        checkDatabaseHealth(),
+        checkFalkorDbConnection(),
+      ]);
+      return {
+        database: database.status === "healthy" || database.status === "degraded",
+        graph,
+      };
     } catch (error) {
       mapServiceError(error);
     }
   }),
 
-  seedDemo: protectedProcedure.input(ws).mutation(async ({ ctx, input }) => {
+  stats: protectedProcedure.input(ws).query(async ({ ctx, input }) => {
     try {
-      const role = await assertWorkspaceMember(input.workspaceId, ctx.user.id);
-      if (role === "member") throw new Error("Only owners and admins can reset the graph");
-      return await graphEngine.seedDemoGraph(input.workspaceId);
+      await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+      return await graphEngine.getGraphStats(input.workspaceId);
     } catch (error) {
       mapServiceError(error);
     }
@@ -54,7 +63,7 @@ export const graphRouter = router({
     .input(ws.extend({ limit: z.number().int().min(1).max(500).default(200) }))
     .query(async ({ ctx, input }) => {
       try {
-        assertWorkspaceMember(input.workspaceId, ctx.user.id);
+        await assertWorkspaceMember(input.workspaceId, ctx.user.id);
         return await graphEngine.getSubgraph(input.workspaceId, input.limit);
       } catch (error) {
         mapServiceError(error);
@@ -65,7 +74,7 @@ export const graphRouter = router({
     .input(ws.extend({ cypher: z.string().min(1).max(4000) }))
     .mutation(async ({ ctx, input }) => {
       try {
-        assertWorkspaceMember(input.workspaceId, ctx.user.id);
+        await assertWorkspaceMember(input.workspaceId, ctx.user.id);
         return await graphEngine.runReadOnlyCypher(input.workspaceId, input.cypher);
       } catch (error) {
         mapServiceError(error);
@@ -83,10 +92,10 @@ export const graphRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        assertWorkspaceMember(input.workspaceId, ctx.user.id);
+        await assertWorkspaceMember(input.workspaceId, ctx.user.id);
 
         // 1. Device fingerprint quota check (multi-account abuse prevention)
-        const fpResult = await checkDeviceQuota(input.fp ?? null);
+        const fpResult = await checkDeviceQuota(input.fp ?? null, ctx.user.id);
         if (!fpResult.ok) {
           throw new TRPCError({
             code: "TOO_MANY_REQUESTS",
@@ -128,6 +137,7 @@ export const graphRouter = router({
         // 6. AI completion with graph context + memory
         const aiResult = await completeWithGraphContext({
           workspaceId: input.workspaceId,
+          userId: ctx.user.id,
           question: input.question,
           graphContext: fullGraphContext,
           memoryThread: memoryMessages,
@@ -154,7 +164,7 @@ export const graphRouter = router({
   memory: router({
     list: protectedProcedure.input(ws).query(async ({ ctx, input }) => {
       try {
-        assertWorkspaceMember(input.workspaceId, ctx.user.id);
+        await assertWorkspaceMember(input.workspaceId, ctx.user.id);
         return await agentMemory.getThread(input.workspaceId, ctx.user.id);
       } catch (error) {
         mapServiceError(error);
@@ -163,7 +173,7 @@ export const graphRouter = router({
 
     clear: protectedProcedure.input(ws).mutation(async ({ ctx, input }) => {
       try {
-        assertWorkspaceMember(input.workspaceId, ctx.user.id);
+        await assertWorkspaceMember(input.workspaceId, ctx.user.id);
         const deleted = await agentMemory.clearThread(input.workspaceId, ctx.user.id);
         return { deleted };
       } catch (error) {
@@ -178,7 +188,7 @@ export const graphRouter = router({
       .input(ws.extend({ provider: z.enum(["jira", "slack"]) }))
       .mutation(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
           const runId = await triggerSync(input.workspaceId, input.provider);
           return { runId, message: `${input.provider} sync started` };
         } catch (error) {
@@ -190,7 +200,7 @@ export const graphRouter = router({
       .input(ws.extend({ limit: z.number().int().min(1).max(50).default(15) }))
       .query(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
           return await syncDb.listRuns(input.workspaceId, input.limit);
         } catch (error) {
           mapServiceError(error);
@@ -202,8 +212,17 @@ export const graphRouter = router({
   conflicts: router({
     list: protectedProcedure.input(ws).query(async ({ ctx, input }) => {
       try {
-        assertWorkspaceMember(input.workspaceId, ctx.user.id);
+        await assertWorkspaceMember(input.workspaceId, ctx.user.id);
         return await detectConflicts(input.workspaceId);
+      } catch (error) {
+        mapServiceError(error);
+      }
+    }),
+
+    scan: protectedProcedure.input(ws).query(async ({ ctx, input }) => {
+      try {
+        await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+        return await scanGithubConflicts(input.workspaceId);
       } catch (error) {
         mapServiceError(error);
       }
@@ -222,15 +241,19 @@ export const graphRouter = router({
           messageB: z.string(),
           branchB: z.string(),
           file: z.string(),
+          evidence: z.enum(["overlapping_hunks", "diff_unavailable"]).optional(),
+          overlappingLines: z.array(z.string().max(100)).max(10).optional(),
+          patchA: z.string().max(4000).optional(),
+          patchB: z.string().max(4000).optional(),
           fp: z.string().max(512).optional(),
         }),
       )
       .mutation(async ({ ctx, input }) => {
         try {
-          assertWorkspaceMember(input.workspaceId, ctx.user.id);
+          await assertWorkspaceMember(input.workspaceId, ctx.user.id);
 
           // Device-level rate limit for conflict resolution (it's AI-heavy)
-          const fpResult = await checkDeviceQuota(input.fp ?? null);
+          const fpResult = await checkDeviceQuota(input.fp ?? null, ctx.user.id);
           if (!fpResult.ok) {
             throw new TRPCError({
               code: "TOO_MANY_REQUESTS",
@@ -258,7 +281,12 @@ export const graphRouter = router({
               messageB: input.messageB,
               branchB: input.branchB,
               status: "open",
+              evidence: input.evidence,
+              overlappingLines: input.overlappingLines,
+              patchA: input.patchA,
+              patchB: input.patchB,
             },
+            ctx.user.id,
             memoryMessages,
           );
 
@@ -267,7 +295,7 @@ export const graphRouter = router({
             input.workspaceId,
             ctx.user.id,
             "assistant",
-            `Conflict in ${input.file} resolved: ${result.suggestion.slice(0, 200)}`,
+            `Conflict suggestion for ${input.file}: ${result.suggestion.slice(0, 200)}`,
           );
 
           return result;

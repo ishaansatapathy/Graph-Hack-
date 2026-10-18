@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { Request, Response } from "express";
 
-import { env, getGoogleOAuthConfig, isGoogleOAuthConfigured } from "../env";
+import { env, getGithubOAuthConfig, getGoogleOAuthConfig, isGoogleOAuthConfigured } from "../env";
 import { getGoogleOAuth2Client } from "../clients/google-oauth";
 import * as userDb from "../db";
 import type { DbUser } from "../db";
@@ -211,6 +211,76 @@ class AuthService {
       return `${env.CLIENT_URL}${destination}${separator}hero=1`;
     } catch (error) {
       throw toAuthError(error, "Google sign-in failed. Please try again.");
+    }
+  }
+
+  /** Exchanges a GitHub OAuth code, signs the user in by their verified primary email. */
+  public async handleGithubCallback(code: string, res: Response, returnTo = "/app"): Promise<string> {
+    const { clientId, clientSecret, redirectUri } = getGithubOAuthConfig();
+    if (!clientId || !clientSecret) {
+      throw new AuthError("INTERNAL", "GitHub OAuth is not configured");
+    }
+
+    try {
+      const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: redirectUri }),
+      });
+      const token = (await tokenRes.json()) as { access_token?: string; error_description?: string };
+      if (!token.access_token) {
+        throw new AuthError("UNAUTHORIZED", token.error_description ?? "GitHub did not return an access token");
+      }
+
+      const gh = (path: string) =>
+        fetch(`https://api.github.com${path}`, {
+          headers: { Authorization: `Bearer ${token.access_token}`, Accept: "application/vnd.github+json", "User-Agent": "stackfox" },
+        });
+      const profile = (await (await gh("/user")).json()) as { id: number; login: string; name?: string | null; avatar_url?: string };
+      const emails = (await (await gh("/user/emails")).json()) as { email: string; primary: boolean; verified: boolean }[];
+      const primary = Array.isArray(emails) ? emails.find((e) => e.primary && e.verified) : undefined;
+      if (!profile?.id || !primary) {
+        throw new AuthError("UNAUTHORIZED", "Your GitHub account needs a verified primary email");
+      }
+
+      const email = sanitizeEmail(primary.email);
+      const providerId = String(profile.id);
+      const name = profile.name?.trim() || profile.login;
+      let user = await this.findUserByEmail(email);
+
+      if (!user) {
+        user = await userDb.insertUser({
+          id: crypto.randomUUID(),
+          email,
+          fullName: name,
+          displayName: profile.login,
+          profileImageUrl: profile.avatar_url ?? null,
+          provider: "github",
+          providerId,
+          emailVerified: true,
+        });
+        void sendWelcomeEmail({ to: email, name });
+      } else if (user.provider === "github") {
+        if (user.provider_id && user.provider_id !== providerId) {
+          throw new AuthError("CONFLICT", "This email is linked to a different GitHub account.");
+        }
+      } else if (user.provider === "dev") {
+        // Dev logins prove nothing about the email; a verified GitHub email takes the account over.
+        await userDb.updateUserProvider(user.id, {
+          provider: "github",
+          providerId,
+          profileImageUrl: profile.avatar_url ?? user.profile_image_url,
+          emailVerified: true,
+        });
+        user = (await this.findUserById(user.id))!;
+      } else {
+        throw new AuthError("CONFLICT", "An account with this email already exists. Sign in with your original method.");
+      }
+
+      issueAuthCookies(res, toTokenUser(user));
+      return `${env.CLIENT_URL}${sanitizeRedirectPath(returnTo)}`;
+    } catch (error) {
+      throw toAuthError(error, "GitHub sign-in failed. Please try again.");
     }
   }
 

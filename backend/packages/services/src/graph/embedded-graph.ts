@@ -20,7 +20,7 @@ export class WorkspaceGraphStore {
   private nextId = 1;
 
   constructor() {
-    this.seedDefaultEnterpriseScenario();
+    // Workspace graphs start empty; demo data must be seeded explicitly.
   }
 
   public clear() {
@@ -58,152 +58,6 @@ export class WorkspaceGraphStore {
 
   public getNodeById(id: string): InMemoryNode | undefined {
     return this.nodes.get(id);
-  }
-
-  public seedDefaultEnterpriseScenario() {
-    this.clear();
-
-    const repo = this.addNode(["Repository"], {
-      name: "stackfox/payments-api",
-      defaultBranch: "main",
-      language: "TypeScript",
-      visibility: "private",
-    });
-
-    const fileToken = this.addNode(["File"], { path: "src/auth/token-service.ts", language: "ts" });
-    const fileAuth = this.addNode(["File"], { path: "src/routes/auth.ts", language: "ts" });
-    const fileCheckout = this.addNode(["File"], { path: "src/routes/checkout.ts", language: "ts" });
-    const fileTest = this.addNode(["File"], { path: "tests/token.test.ts", language: "ts" });
-
-    this.addEdge(repo.id, fileToken.id, "CONTAINS");
-    this.addEdge(repo.id, fileAuth.id, "CONTAINS");
-    this.addEdge(repo.id, fileCheckout.id, "CONTAINS");
-    this.addEdge(repo.id, fileTest.id, "CONTAINS");
-
-    const fnVerify = this.addNode(["Function"], {
-      name: "verifyToken",
-      file: "src/auth/token-service.ts",
-      signature: "verifyToken(token: string): Claims",
-      lineStart: 42,
-    });
-    const fnIssue = this.addNode(["Function"], {
-      name: "issueRefreshToken",
-      file: "src/auth/token-service.ts",
-      signature: "issueRefreshToken(userId: string): string",
-      lineStart: 89,
-    });
-    const fnRefresh = this.addNode(["Function"], {
-      name: "refreshSession",
-      file: "src/auth/token-service.ts",
-      signature: "refreshSession(refresh: string): Session",
-      lineStart: 134,
-    });
-    const fnLogin = this.addNode(["Function"], {
-      name: "loginHandler",
-      file: "src/routes/auth.ts",
-      signature: "loginHandler(req: Request, res: Response)",
-      lineStart: 25,
-    });
-    const fnCheckout = this.addNode(["Function"], {
-      name: "checkoutHandler",
-      file: "src/routes/checkout.ts",
-      signature: "checkoutHandler(req: Request, res: Response)",
-      lineStart: 50,
-    });
-
-    this.addEdge(fileToken.id, fnVerify.id, "DECLARES");
-    this.addEdge(fileToken.id, fnIssue.id, "DECLARES");
-    this.addEdge(fileToken.id, fnRefresh.id, "DECLARES");
-    this.addEdge(fileAuth.id, fnLogin.id, "DECLARES");
-    this.addEdge(fileCheckout.id, fnCheckout.id, "DECLARES");
-
-    this.addEdge(fnLogin.id, fnIssue.id, "CALLS");
-    this.addEdge(fnCheckout.id, fnVerify.id, "CALLS");
-    this.addEdge(fnRefresh.id, fnVerify.id, "CALLS");
-    this.addEdge(fnRefresh.id, fnIssue.id, "CALLS");
-
-    const test1 = this.addNode(["Test"], { name: "test_token_expiry", status: "passing" });
-    const test2 = this.addNode(["Test"], { name: "test_refresh_rotation", status: "passing" });
-    this.addEdge(fileTest.id, test1.id, "DECLARES");
-    this.addEdge(fileTest.id, test2.id, "DECLARES");
-    this.addEdge(test1.id, fnVerify.id, "TESTS");
-    this.addEdge(test2.id, fnRefresh.id, "TESTS");
-
-    const commitA = this.addNode(["Commit"], {
-      sha: "a1b2c3d",
-      message: "fix(auth): enforce 15m access-token expiry AUTH-151",
-      author: "priya",
-      branch: "main",
-    });
-    const commitB = this.addNode(["Commit"], {
-      sha: "d4e5f6a",
-      message: "feat(auth): refresh token flow AUTH-142",
-      author: "ishaan",
-      branch: "feature/jwt-refresh",
-    });
-
-    this.addEdge(commitA.id, fnVerify.id, "MODIFIED");
-    this.addEdge(commitB.id, fnVerify.id, "MODIFIED");
-    this.addEdge(commitB.id, fnIssue.id, "MODIFIED");
-    this.addEdge(commitB.id, fnRefresh.id, "MODIFIED");
-    this.addEdge(commitA.id, fileToken.id, "MODIFIED");
-    this.addEdge(commitB.id, fileToken.id, "MODIFIED");
-
-    const issue1 = this.addNode(["Issue"], {
-      key: "AUTH-151",
-      title: "Security: access tokens must expire in 15 minutes",
-      status: "In Review",
-    });
-    const issue2 = this.addNode(["Issue"], {
-      key: "AUTH-142",
-      title: "Zero-downtime refresh token migration",
-      status: "In Progress",
-    });
-    this.addEdge(commitA.id, issue1.id, "REFERENCES");
-    this.addEdge(commitB.id, issue2.id, "REFERENCES");
-
-    const disc = this.addNode(["Discussion"], {
-      channel: "#dev-security",
-      author: "priya",
-      text: "Do NOT drop the 15m expiry check when adding refresh tokens. Audit requirement SEC-77.",
-    });
-    this.addEdge(disc.id, issue1.id, "MENTIONS");
-    this.addEdge(disc.id, fnVerify.id, "CONCERNS");
-
-    const dec = this.addNode(["Decision"], {
-      title: "Access tokens expire in 15 minutes",
-      rationale: "Security audit SEC-77",
-      status: "active",
-    });
-    this.addEdge(dec.id, fnVerify.id, "CONSTRAINS");
-    this.addEdge(dec.id, disc.id, "DECIDED_IN");
-
-    const conflict = this.addNode(["Conflict"], {
-      id: "conflict-1",
-      file: "src/auth/token-service.ts",
-      baseBranch: "main",
-      incomingBranch: "feature/jwt-refresh",
-      status: "open",
-    });
-    this.addEdge(conflict.id, fnVerify.id, "AFFECTS");
-    this.addEdge(conflict.id, commitA.id, "BETWEEN");
-    this.addEdge(conflict.id, commitB.id, "BETWEEN");
-
-    // Add initial search chunks
-    this.addNode(["Chunk"], {
-      chunkId: "chk_verify_token",
-      text: "verifyToken validates the JWT signature using HMAC SHA256 and verifies that expiration does not exceed 15 minutes. It handles key rotation and revocation check.",
-      label: "src/auth/token-service.ts",
-      sourceType: "File",
-      sourceKey: "src/auth/token-service.ts",
-    });
-    this.addNode(["Chunk"], {
-      chunkId: "chk_refresh_token",
-      text: "issueRefreshToken generates a cryptographically random 30-day token tied to tokenVersion in PostgreSQL users table. Bumping tokenVersion revokes all active refresh tokens.",
-      label: "src/auth/token-service.ts",
-      sourceType: "File",
-      sourceKey: "src/auth/token-service.ts",
-    });
   }
 
   public query(cypher: string, params: Record<string, unknown> = {}): Record<string, unknown>[] {
@@ -248,7 +102,33 @@ export class WorkspaceGraphStore {
       }));
     }
 
-    // 4. Node keyword search: MATCH (n:Label) WHERE toLower(...) CONTAINS $kw
+    // 4. Ranked GraphRAG lookup: MATCH (n:Label) WHERE ... CONTAINS $k0_0 OR ...
+    const rankedSearch = /MATCH \(n:([A-Za-z0-9_]+)\) WHERE ([\s\S]+?) RETURN id\(n\) AS id, labels\(n\)\[0\] AS label, properties\(n\) AS props/i.exec(q);
+    if (rankedSearch) {
+      const label = rankedSearch[1]!;
+      const predicates = [...rankedSearch[2]!.matchAll(/toLower\(toString\(n\.([A-Za-z0-9_]+)\)\) CONTAINS \$(k\d+_\d+)/gi)];
+      const limit = Number(/LIMIT (\d+)/i.exec(q)?.[1] ?? 25);
+      const matched = Array.from(this.nodes.values()).flatMap((node) => {
+        if (!node.labels.includes(label)) return [];
+        let score = 0;
+        let found = false;
+        for (const [, prop, key] of predicates) {
+          const value = String(node.properties[String(prop)] ?? "").toLowerCase();
+          const term = String(params[String(key)] ?? "").toLowerCase();
+          if (!term || !value.includes(term)) continue;
+          found = true;
+          score += value === term ? 5 : 2;
+        }
+        return found ? [{ node, score }] : [];
+      }).sort((a, b) => b.score - a.score);
+      return matched.slice(0, limit).map(({ node }) => ({
+        id: node.id,
+        label: node.labels[0] || label,
+        props: node.properties,
+      }));
+    }
+
+    // 5. Node keyword search: MATCH (n:Label) WHERE toLower(...) CONTAINS $kw
     const kwMatch = /MATCH \(n:([A-Za-z0-9_]+)\) WHERE toLower\(toString\(n\.([A-Za-z0-9_]+)\)\) CONTAINS \$kw/i.exec(q);
     if (kwMatch) {
       const label = kwMatch[1]!;
@@ -266,7 +146,24 @@ export class WorkspaceGraphStore {
       }));
     }
 
-    // 5. 1-hop neighbours: MATCH (n)-[r]-(m) WHERE id(n) = $id
+    // 6. Directional one-hop neighbours used by GraphRAG.
+    if (/MATCH \(n\)-\[r\]->\(nb\) WHERE id\(n\) = \$id/i.test(q) || /MATCH \(n\)<-\[r\]-\(nb\) WHERE id\(n\) = \$id/i.test(q)) {
+      const outgoing = /MATCH \(n\)-\[r\]->\(nb\)/i.test(q);
+      const targetId = String(params.id ?? "");
+      const results: Record<string, unknown>[] = [];
+      for (const edge of this.edges) {
+        const adjacentId = outgoing
+          ? (edge.source === targetId ? edge.target : null)
+          : (edge.target === targetId ? edge.source : null);
+        if (!adjacentId) continue;
+        const neighbor = this.nodes.get(adjacentId);
+        if (neighbor) results.push({ relType: edge.type, nbLabel: neighbor.labels[0] || "Node", nbProps: neighbor.properties });
+      }
+      const limit = Number(/LIMIT (\d+)/i.exec(q)?.[1] ?? 20);
+      return results.slice(0, limit);
+    }
+
+    // 7. 1-hop neighbours: MATCH (n)-[r]-(m) WHERE id(n) = $id
     if (/MATCH \(n\)-\[r\]-\(m\) WHERE id\(n\) = \$id/i.test(q)) {
       const targetId = String(params.id || "");
       const results: Record<string, unknown>[] = [];
@@ -296,7 +193,7 @@ export class WorkspaceGraphStore {
       return results.slice(0, 20);
     }
 
-    // 6. Explicit Conflict query
+    // 8. Explicit Conflict query
     if (/MATCH \(c:Conflict\)-/i.test(q)) {
       const conflicts = Array.from(this.nodes.values()).filter((n) => n.labels.includes("Conflict"));
       return conflicts.map((c) => {
@@ -309,35 +206,55 @@ export class WorkspaceGraphStore {
           file: c.properties.file,
           branchA: c.properties.baseBranch || "main",
           branchB: c.properties.incomingBranch || "feature/jwt-refresh",
-          shaA: c1?.properties.sha || "a1b2c3d",
-          authorA: c1?.properties.author || "priya",
-          msgA: c1?.properties.message || "fix(auth): enforce 15m access-token expiry",
-          shaB: c2?.properties.sha || "d4e5f6a",
-          authorB: c2?.properties.author || "ishaan",
-          msgB: c2?.properties.message || "feat(auth): refresh token flow",
+          shaA: c1?.properties.sha,
+          authorA: c1?.properties.author,
+          msgA: c1?.properties.message,
+          shaB: c2?.properties.sha,
+          authorB: c2?.properties.author,
+          msgB: c2?.properties.message,
           status: c.properties.status || "open",
         };
       });
     }
 
-    // 7. Implicit Conflict query
-    if (/MATCH \(f:File\)<-mod/i.test(q) || /WHERE cA\.branch <> cB\.branch/i.test(q)) {
-      return [
-        {
-          file: "src/auth/token-service.ts",
-          shaA: "a1b2c3d",
-          authorA: "priya",
-          msgA: "fix(auth): enforce 15m access-token expiry AUTH-151",
-          branchA: "main",
-          shaB: "d4e5f6a",
-          authorB: "ishaan",
-          msgB: "feat(auth): refresh token flow AUTH-142",
-          branchB: "feature/jwt-refresh",
-        },
-      ];
+    // 9. Candidate same-file changes derived from actual graph nodes and edges.
+    if (/MATCH \(f:File\)<-/i.test(q)) {
+      const candidates: Record<string, unknown>[] = [];
+      for (const file of this.nodes.values()) {
+        if (!file.labels.includes("File")) continue;
+        const commits = this.edges
+          .filter((edge) => edge.type === "MODIFIED" && edge.target === file.id)
+          .map((edge) => this.nodes.get(edge.source))
+          .filter((node): node is InMemoryNode => Boolean(node?.labels.includes("Commit")));
+        for (let i = 0; i < commits.length; i++) {
+          for (let j = i + 1; j < commits.length; j++) {
+            const a = commits[i]!;
+            const b = commits[j]!;
+            const shaA = String(a.properties.sha ?? "");
+            const shaB = String(b.properties.sha ?? "");
+            const branchA = String(a.properties.branch ?? "");
+            const branchB = String(b.properties.branch ?? "");
+            if (!shaA || !shaB || !branchA || !branchB || branchA === branchB || shaA >= shaB) continue;
+            candidates.push({
+              file: file.properties.path,
+              shaA,
+              authorA: a.properties.author,
+              messageA: a.properties.message,
+              branchA,
+              shaB,
+              authorB: b.properties.author,
+              messageB: b.properties.message,
+              branchB,
+            });
+          }
+        }
+      }
+      return candidates
+        .sort((a, b) => String(a.file).localeCompare(String(b.file)) || String(a.shaA).localeCompare(String(b.shaA)))
+        .slice(0, 50);
     }
 
-    // 8. Chunk text search: MATCH (ch:Chunk) WHERE toLower(ch.text) CONTAINS $kw
+    // 10. Chunk text search: MATCH (ch:Chunk) WHERE toLower(ch.text) CONTAINS $kw
     if (/MATCH \(ch:Chunk\) WHERE toLower\(ch\.text\) CONTAINS \$kw/i.test(q)) {
       const kw = String(params.kw || "").toLowerCase();
       const chunks = Array.from(this.nodes.values()).filter((n) => {
@@ -354,7 +271,7 @@ export class WorkspaceGraphStore {
       }));
     }
 
-    // 9. Generic MATCH (n:Label) RETURN n...
+    // 11. Generic MATCH (n:Label) RETURN n...
     const labelMatch = /MATCH \(n:([A-Za-z0-9_]+)\) RETURN/i.exec(q);
     if (labelMatch) {
       const label = labelMatch[1]!;
@@ -366,7 +283,7 @@ export class WorkspaceGraphStore {
       }));
     }
 
-    // 10. Generic MATCH ()-[r]->() or general return
+    // 12. Generic MATCH ()-[r]->() or general return
     if (/RETURN c\.sha, i\.key/i.test(q)) {
       return [
         { "c.sha": "a1b2c3d", "i.key": "AUTH-151" },

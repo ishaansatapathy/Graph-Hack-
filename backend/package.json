@@ -11,12 +11,16 @@
     "dev:api": "npm run dev -w @stackfox/api",
     "dev:all": "concurrently -n api,web -c blue,magenta \"npm run dev -w @stackfox/api\" \"npm run dev -w @stackfox/web\"",
     "dev:web": "npm run dev -w @stackfox/web",
+    "build": "npm run build -w @stackfox/web",
+    "start:api": "npm run start -w @stackfox/api",
+    "start:web": "npm run start -w @stackfox/web",
     "check-types": "npm run check-types -w @stackfox/services && npm run check-types -w @stackfox/trpc && npm run check-types -w @stackfox/api && npm run check-types -w @stackfox/web",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:push": "dotenv -e .env -- npx drizzle-kit push",
-    "db:generate": "dotenv -e .env -- npx drizzle-kit generate",
-    "db:migrate": "dotenv -e .env -- npx drizzle-kit migrate",
+    "db:new-migration": "tsx packages/services/src/db/new-migration.ts",
+    "db:check-migrations": "tsx packages/services/src/db/migrate.ts --check",
+    "db:migrate": "tsx packages/services/src/db/migrate.ts",
     "db:studio": "dotenv -e .env -- npx drizzle-kit studio"
   },
   "engines": {

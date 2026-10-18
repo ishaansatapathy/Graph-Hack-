@@ -1,5 +1,6 @@
 import { z, zodUndefinedModel } from "../../schema";
-import { publicProcedure, router } from "../../trpc";
+import { TRPCError } from "@trpc/server";
+import { protectedProcedure, publicProcedure, router } from "../../trpc";
 import { checkDatabaseHealth, pingFalkorDb, runDatabaseHousekeeping } from "../../services";
 
 export const healthRouter = router({
@@ -40,8 +41,8 @@ export const healthRouter = router({
       };
     }),
 
-  runHousekeeping: publicProcedure
-    .meta({ openapi: { method: "POST", path: "/health/housekeeping" } })
+  runHousekeeping: protectedProcedure
+    .meta({ openapi: { method: "POST", path: "/health/housekeeping", protect: true } })
     .input(zodUndefinedModel)
     .output(
       z.object({
@@ -50,11 +51,15 @@ export const healthRouter = router({
         prunedDeviceQuotas: z.number(),
         prunedExpiredInvites: z.number(),
         reapedStaleSyncRuns: z.number(),
+        prunedGithubWebhookDeliveries: z.number(),
         success: z.boolean(),
         error: z.string().optional(),
       }),
     )
-    .mutation(async () => {
+    .mutation(async ({ ctx }) => {
+      if (ctx.user.role !== "admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Platform administrator access required" });
+      }
       return await runDatabaseHousekeeping();
     }),
 });
