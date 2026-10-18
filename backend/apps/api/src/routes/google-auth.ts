@@ -58,7 +58,7 @@ googleAuthRouter.get("/google/callback", async (req, res) => {
   const parsed = googleCallbackQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     return res.redirect(
-      `${env.CLIENT_URL}/sign-in?error=${encodeURIComponent("Invalid Google sign-in callback.")}`,
+      `${env.CLIENT_URL}/signin?error=${encodeURIComponent("Invalid Google sign-in callback.")}`,
     );
   }
 
@@ -70,12 +70,12 @@ googleAuthRouter.get("/google/callback", async (req, res) => {
       (oauthError === "redirect_uri_mismatch"
         ? "Google sign-in redirect URI mismatch. Clear cookies and try again from the sign-in page."
         : oauthError.replace(/_/g, " "));
-    return res.redirect(`${env.CLIENT_URL}/sign-in?error=${encodeURIComponent(message)}`);
+    return res.redirect(`${env.CLIENT_URL}/signin?error=${encodeURIComponent(message)}`);
   }
 
   if (!code) {
     return res.redirect(
-      `${env.CLIENT_URL}/sign-in?error=${encodeURIComponent("Start sign-in from the sign-in page.")}`,
+      `${env.CLIENT_URL}/signin?error=${encodeURIComponent("Start sign-in from the sign-in page.")}`,
     );
   }
 
@@ -90,7 +90,7 @@ googleAuthRouter.get("/google/callback", async (req, res) => {
 
   if (!oauthState || !expectedNonce || oauthState.nonce !== expectedNonce) {
     return res.redirect(
-      `${env.CLIENT_URL}/sign-in?error=${encodeURIComponent("Google sign-in session expired. Please try again.")}`,
+      `${env.CLIENT_URL}/signin?error=${encodeURIComponent("Google sign-in session expired. Please try again.")}`,
     );
   }
 
@@ -105,7 +105,7 @@ googleAuthRouter.get("/google/callback", async (req, res) => {
   } catch (error) {
     const authError = toAuthError(error, "Google sign-in failed. Please try again.");
     console.error("Google OAuth callback failed", authError.message);
-    return res.redirect(`${env.CLIENT_URL}/sign-in?error=${encodeURIComponent(authError.message)}`);
+    return res.redirect(`${env.CLIENT_URL}/signin?error=${encodeURIComponent(authError.message)}`);
   }
 });
 
@@ -128,6 +128,6 @@ googleAuthRouter.all("/dev-login", async (req, res) => {
     return res.redirect(redirectUrl);
   } catch (error) {
     console.error("Dev login failed", error);
-    return res.redirect(`${env.CLIENT_URL}/sign-in?error=Dev%20login%20failed`);
+    return res.redirect(`${env.CLIENT_URL}/signin?error=Dev%20login%20failed`);
   }
 });

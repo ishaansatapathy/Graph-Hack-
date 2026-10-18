@@ -202,7 +202,7 @@ class AuthService {
 
       if (!user.email_verified) {
         clearAuthCookies(res);
-        return `${env.CLIENT_URL}/sign-in?error=${encodeURIComponent("Please verify your Google email and try again.")}`;
+        return `${env.CLIENT_URL}/signin?error=${encodeURIComponent("Please verify your Google email and try again.")}`;
       }
 
       issueAuthCookies(res, toTokenUser(user));
