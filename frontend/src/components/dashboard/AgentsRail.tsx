@@ -55,7 +55,7 @@ export function AgentsRail({
                 <Skeleton className="h-9 w-full" />
               </div>
             ))}
-          {!loading && agents.length === 0 && <EmptyState title="No agents connected" body="Agents appear here once they register with the SYNK MCP server." />}
+          {!loading && agents.length === 0 && <EmptyState title="No agents connected" body="Agents appear here once they register with the Stackfox MCP server." />}
           {agents.map((a) => (
             <AgentCard
               key={a.id}
