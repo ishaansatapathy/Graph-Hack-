@@ -55,7 +55,9 @@ export async function registerGithubRepositoryWebhook(input: {
   }
 
   const hooks = (await listResponse.json()) as Array<{ id: number; config?: { url?: string } }>;
-  const existing = hooks.find((hook) => hook.config?.url?.includes(`/webhooks/github?workspaceId=`));
+  // Reuse only this workspace's hook (also repoints one left on an old API URL); other workspaces keep theirs.
+  const workspaceParam = `/webhooks/github?workspaceId=${encodeURIComponent(input.workspaceId)}`;
+  const existing = hooks.find((hook) => hook.config?.url?.includes(workspaceParam));
 
   const body = {
     active: true,

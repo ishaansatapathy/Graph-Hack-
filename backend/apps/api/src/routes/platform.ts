@@ -12,6 +12,7 @@ import {
   createGithubPullRequest,
   createWorkspaceService,
   ensureGithubEditBranch,
+  getApiPublicUrl,
   getOrCreateWorkspaceForUser,
   getWorkspaceAiUsage,
   getWorkspaceFileDraft,
@@ -404,8 +405,21 @@ platformRouter.post(
       await assertWorkspaceAdmin(workspaceId, user.id);
       if (provider === "github") {
         const input = githubInput.parse(req.body ?? {});
-        // Webhook registration needs a public API URL; connecting for browsing/importing does not.
-        return workspaceIntegrations.upsertGithub(workspaceId, { ...input, registerWebhook: false });
+        // GitHub can only deliver pushes to a public HTTPS API; locally the repo is still usable for browsing/importing.
+        const publicApi = /^https:\/\//i.test(getApiPublicUrl()) && !/localhost|127\.0\.0\.1/i.test(getApiPublicUrl());
+        const result = await workspaceIntegrations.upsertGithub(workspaceId, {
+          ...input,
+          registerWebhook: publicApi,
+          generateWebhookSecret: publicApi,
+          webhookOptional: true,
+        });
+        const hook = result.webhookRegistration;
+        if (!hook) {
+          return { message: "GitHub connected. Push events need a public HTTPS API_PUBLIC_URL, so no webhook was set up." };
+        }
+        return hook.ok
+          ? { message: `GitHub connected · ${hook.message}` }
+          : { ok: false, message: `GitHub connected, but the push webhook was not set up: ${hook.message}` };
       }
       if (provider === "jira") {
         await workspaceIntegrations.upsertJira(workspaceId, jiraInput.parse(req.body ?? {}));

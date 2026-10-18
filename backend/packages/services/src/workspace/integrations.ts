@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import { githubWebhookUrl, normalizeJiraCloudBaseUrl, normalizeSlackWebhookUrl } from "../integrations/config";
 import type { IntegrationProvider } from "./db";
 import * as workspaceDb from "./db";
@@ -66,6 +68,10 @@ export async function upsertGithub(
     repositoryFullName?: string;
     webhookSecret?: string;
     registerWebhook?: boolean;
+    /** Create a webhook secret when none is stored yet (the studio has no secret field). */
+    generateWebhookSecret?: boolean;
+    /** Save the connection even if the webhook cannot be registered; the result reports why. */
+    webhookOptional?: boolean;
   },
 ): Promise<UpsertGithubResult> {
   const existing = (await readConfig(workspaceId, "github")) ?? {};
@@ -73,12 +79,14 @@ export async function upsertGithub(
   if (!token) throw new Error("GitHub token is required");
 
   const repositoryFullName = input.repositoryFullName?.trim() || existing.repositoryFullName?.trim() || "";
-  const webhookSecret = input.webhookSecret?.trim() || existing.webhookSecret?.trim() || "";
+  const webhookSecret = input.webhookSecret?.trim() || existing.webhookSecret?.trim()
+    || (input.generateWebhookSecret ? crypto.randomBytes(32).toString("hex") : "");
 
   let webhookRegistration: { ok: boolean; message: string } | undefined;
   if (input.registerWebhook !== false && repositoryFullName && webhookSecret) {
-    webhookRegistration = await registerGithubRepositoryWebhook({ token, repositoryFullName, webhookSecret, workspaceId });
-    if (!webhookRegistration.ok) throw new Error(webhookRegistration.message);
+    webhookRegistration = await registerGithubRepositoryWebhook({ token, repositoryFullName, webhookSecret, workspaceId })
+      .catch((error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : "GitHub could not be reached" }));
+    if (!webhookRegistration.ok && !input.webhookOptional) throw new Error(webhookRegistration.message);
   }
 
   await workspaceDb.upsertIntegration(
