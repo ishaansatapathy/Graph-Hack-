@@ -17,7 +17,22 @@ function toRole(role: string): WorkspacePublic["role"] {
   return "member";
 }
 
-export async function getOrCreateWorkspaceForUser(
+/** Concurrent first requests for a new user must not race to create two workspaces. */
+const inflight = new Map<string, Promise<WorkspacePublic>>();
+
+export function getOrCreateWorkspaceForUser(
+  userId: string,
+  displayName: string,
+  email?: string,
+): Promise<WorkspacePublic> {
+  const pending = inflight.get(userId);
+  if (pending) return pending;
+  const p = resolveOrCreateWorkspace(userId, displayName, email).finally(() => inflight.delete(userId));
+  inflight.set(userId, p);
+  return p;
+}
+
+async function resolveOrCreateWorkspace(
   userId: string,
   displayName: string,
   email?: string,
