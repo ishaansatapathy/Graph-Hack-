@@ -34,6 +34,9 @@ const envSchema = z.object({
   GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
   GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
   GOOGLE_OAUTH_REDIRECT_URI: z.string().optional(),
+  GITHUB_OAUTH_CLIENT_ID: z.preprocess(emptyToUndefined, z.string().optional()),
+  GITHUB_OAUTH_CLIENT_SECRET: z.preprocess(emptyToUndefined, z.string().optional()),
+  GITHUB_OAUTH_REDIRECT_URI: z.preprocess(emptyToUndefined, z.string().optional()),
   DATABASE_PATH: z.string().optional(),
   API_PUBLIC_URL: z.string().optional(),
   FALKORDB_HOST: z.string().optional(),
@@ -107,6 +110,20 @@ export function getGoogleOAuthConfig() {
 export function isGoogleOAuthConfigured() {
   const { clientId, clientSecret, redirectUri } = getGoogleOAuthConfig();
   return !!(clientId && clientSecret && redirectUri);
+}
+
+export function getGithubOAuthConfig() {
+  const apiBase = (env.API_PUBLIC_URL ?? "http://localhost:8000").replace(/\/$/, "");
+  return {
+    clientId: env.GITHUB_OAUTH_CLIENT_ID?.trim(),
+    clientSecret: env.GITHUB_OAUTH_CLIENT_SECRET?.trim(),
+    redirectUri: env.GITHUB_OAUTH_REDIRECT_URI?.trim() || `${apiBase}/auth/github/callback`,
+  };
+}
+
+export function isGithubOAuthConfigured() {
+  const { clientId, clientSecret } = getGithubOAuthConfig();
+  return !!(clientId && clientSecret);
 }
 
 export function isResendConfigured() {
