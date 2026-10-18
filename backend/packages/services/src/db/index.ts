@@ -600,6 +600,7 @@ export async function insertUser(user: {
 }
 
 export async function updateUserProvider(id: string, update: {
+  provider?: string;
   profileImageUrl?: string | null;
   providerId?: string;
   fullName?: string;
@@ -608,6 +609,7 @@ export async function updateUserProvider(id: string, update: {
   await db.update(schema.users)
     .set({
       ...(update.profileImageUrl !== undefined && { profileImageUrl: update.profileImageUrl }),
+      ...(update.provider && { provider: update.provider }),
       ...(update.providerId && { providerId: update.providerId }),
       ...(update.fullName && { fullName: update.fullName, name: update.fullName }),
       ...(update.emailVerified !== undefined && { emailVerified: update.emailVerified }),
