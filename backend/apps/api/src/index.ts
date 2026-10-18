@@ -8,9 +8,10 @@ import { checkDatabaseHealth, startIntegrationSyncWorker } from "@stackfox/servi
 
 import { env } from "./env";
 import { githubWebhookRouter } from "./routes/github-webhook";
+import { githubAuthRouter } from "./routes/github-auth";
 import { googleAuthRouter } from "./routes/google-auth";
+import { liveRouter } from "./routes/live";
 import { platformRouter } from "./routes/platform";
-import { scenarioRouter } from "./routes/scenario";
 
 const PORT = Number(process.env.PORT ?? 8000);
 
@@ -25,7 +26,7 @@ app.use(cookieParser());
 app.use("/webhooks/github", githubWebhookRouter);
 app.use(express.json({ limit: "2mb" }));
 
-app.use(scenarioRouter);
+app.use("/live", liveRouter);
 app.use(platformRouter);
 
 app.get("/", (_req, res) => {
@@ -33,8 +34,9 @@ app.get("/", (_req, res) => {
     name: "Stackfox API",
     trpc: "/trpc",
     health: "/health",
-    scenario: "/scenario",
-    events: "/events",
+    scenario: "/live/scenario",
+    events: "/live/events",
+    import: "POST /live/import",
     auth: "/auth/google/callback",
   });
 });
@@ -51,6 +53,7 @@ app.get("/health", async (_req, res) => {
 });
 
 app.use("/auth", googleAuthRouter);
+app.use("/auth", githubAuthRouter);
 
 app.use(
   "/trpc",
