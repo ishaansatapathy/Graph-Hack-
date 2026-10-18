@@ -71,13 +71,13 @@ Open **Integrations**. For each provider, fill the fields, click **Connect**, th
 | Jira | **Jira site** (`https://your-team.atlassian.net`), **Account email**, **API token** | **Sync now** pulls issues into the graph as `Issue` nodes |
 | Slack | **Incoming webhook URL** (`https://hooks.slack.com/…`) | Posting push summaries to a channel |
 
-- GitHub token: GitHub → Settings → Developer settings → Personal access tokens. A classic token with the `repo` scope is enough for the IDE.
+- GitHub token: GitHub → Settings → Developer settings → Personal access tokens. A classic token with the `repo` scope is enough for the IDE. Add `admin:repo_hook` (or, for a fine-grained token, **Webhooks: Read and write**) so Stackfox can register the push webhook.
 - Jira API token: [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
 - Slack: create an app with **Incoming Webhooks** enabled and copy the webhook for your channel.
 
 Credentials are encrypted before they are stored and are never shown again. **Sync runs** and **Audit log** at the bottom show what ran and who changed what.
 
-> **Known gap:** connecting GitHub from the studio does not register a push webhook yet, so the push → graph → Slack/Jira automation described below does not run from this UI. Imports, the IDE and Jira sync work.
+**Push automation.** When the API has a public HTTPS `API_PUBLIC_URL` (it does on the live demo), connecting GitHub also registers a `push` webhook on the repository. From then on every push is written into the graph, summarised in Slack, linked to Jira keys in the commit message, and checked for new conflicts. If the token cannot manage webhooks, GitHub is still connected and the message says why the webhook was skipped. Reconnecting updates the same webhook instead of adding another.
 
 ### 5. Work in the IDE
 
@@ -104,9 +104,14 @@ Only public HTTPS addresses are allowed, and requests do not follow redirects.
 
 1. Open **Conflicts** after an import that found overlapping branches.
 2. Each card shows both sides' branch, author and commit, and the overlapping lines when GitHub diffs are available.
-3. Click **Review with AI** for a short review built from graph evidence (linked issues, decisions, ownership, callers to re-test). It is advice only: nothing is changed, merged or tested.
+3. Under **Graph context**, the card lists who usually works in the file, issues linked to it, and callers in other files to re-test. If one side's author rarely touches the file, it says so. Hover the file name for a one-line summary.
+4. Click **Review with AI** for a short review built from the same graph evidence. It is advice only: nothing is changed, merged or tested.
 
-### 8. Sign out
+### 8. Ask the graph
+
+In the Studio's left rail, **Ask the graph** answers questions about the workspace from FalkorDB only, for example *"Which files do several branches change?"* or *"Why did lib/request.js change?"*. Each answer shows how many graph facts it used, and **Graph queries used** lists the retrieval steps behind it.
+
+### 9. Sign out
 
 Use the sign-out icon at the right of the top bar.
 
@@ -191,7 +196,8 @@ flowchart LR
 | `SlackChannel` / `SlackMessage` | `name` / `text`, `user`, `ts`, `url` | Slack sync |
 | `Label` | `name` | Jira sync |
 | `Chunk` | `text`, `index` | GraphRAG chunking of commits and issues (no vector store) |
-| `Function`, `Decision`, `Discussion` | `name`, `file` / `title`, `rationale` / `text`, `channel` | Read by retrieval and the conflict reviewer. Nothing in the importer or syncs writes them yet, so they appear only if you add them (see [Limitations](#limitations)). |
+| `Function` | `name`, `file`, `signature`, `line` | importer — JS/TS/Python definitions in the files it fetches for conflicts, linked by `File -[:DEFINES]->` and `-[:CALLS]->` |
+| `Decision`, `Discussion` | `title`, `rationale` / `text`, `channel` | Read by retrieval and the conflict reviewer. No sync writes them yet (see [Limitations](#limitations)). |
 
 ### Relationships
 
@@ -205,6 +211,8 @@ graph LR
   Commit -->|MODIFIED| File
   Commit -->|REFERENCES| Issue
   Commit -.->|LIKELY_RELATES| Issue
+  File -->|DEFINES| Function
+  Function -->|CALLS| Function
   Person -->|AUTHORED| Commit
   Conflict -->|AFFECTS| File
   Conflict -->|BETWEEN| Change
@@ -529,10 +537,10 @@ frontend/
 - The importer compares up to 8 branches and 60 files per side per import.
 - AI review is advice only; it never edits, merges or runs tests.
 - `Decision` and `Discussion` nodes are read by the conflict reviewer but not yet produced by any sync, so reviews of imported branches usually report no graph context.
-- GraphRAG questions are available through the API (`graph.ask`); the new dashboard does not have a question box yet.
+- GraphRAG answers come from the Studio's **Ask the graph** box (`POST /api/graph/ask`) and the tRPC `graph.ask` procedure; both run the same code.
 - Retrieval is full-text plus graph traversal. There are no embeddings or vector search.
 - Co-editing in the IDE is draft sharing with polling (about every 2.5 seconds), not live cursors or a CRDT.
-- Ownership and impact-radius evidence depends on `Commit`, `File` and `Function`/`CALLS` data being present. `Function` and `CALLS` are not produced by the importer yet, so impact radius is empty until they are loaded.
+- The code index is pattern-based, not a parser. It reads only the files fetched for conflicts (up to 12 per import), matches calls by name, and links member calls (`x.name()`) only within the same file. Impact radius therefore covers callers among those files, not the whole repository.
 - Suggested issues for commits without a Jira key are guesses. They are labelled as such and never move a ticket.
 - There is no VS Code extension or downloadable IDE; the web workspace is the product.
 
