@@ -9,12 +9,12 @@ import type { StreamState } from "@/lib/scenario-store";
 import type { Agent, ToolCallEvent } from "@/lib/types";
 import { actorStyle, fmtClock } from "./actor";
 
-type Filter = "all" | "tools" | "agents" | "synk";
+type Filter = "all" | "tools" | "agents" | "stackfox";
 const FILTERS: { id: Filter; label: string }[] = [
   { id: "all", label: "All" },
   { id: "tools", label: "MCP tool calls" },
   { id: "agents", label: "Agents" },
-  { id: "synk", label: "SYNK" },
+  { id: "stackfox", label: "Stackfox" },
 ];
 
 export function EventLog({
@@ -42,7 +42,7 @@ export function EventLog({
   const rows = useMemo(
     () =>
       log.filter((e) =>
-        filter === "all" ? true : filter === "tools" ? e.kind === "tool_call" || e.kind === "tool_result" : filter === "agents" ? agentIds.has(e.actor) : e.actor === "synk",
+        filter === "all" ? true : filter === "tools" ? e.kind === "tool_call" || e.kind === "tool_result" : filter === "agents" ? agentIds.has(e.actor) : (e.actor === "stackfox" || e.actor === "synk"),
       ),
     [log, filter, agentIds],
   );
@@ -102,8 +102,8 @@ export function EventLog({
             {stream !== "error" && log.length === 0 && (
               <EmptyState
                 icon={<TerminalSquare size={16} strokeWidth={1.5} />}
-                title={stream === "connecting" ? "Connecting to agents…" : "No events yet"}
-                body="Run the scenario to stream every agent action and MCP tool call — with arguments and results — as it happens."
+                title={stream === "connecting" ? "Connecting to workspace…" : "No events yet"}
+                body="Imports, pushes and conflict checks stream here — every GitHub call and graph query with its arguments and results."
               />
             )}
             {rows.map((e) => (
