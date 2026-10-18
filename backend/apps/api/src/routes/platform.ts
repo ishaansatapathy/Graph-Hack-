@@ -422,8 +422,24 @@ const jiraInput = z.object({
 });
 const slackInput = z.object({
   webhookUrl: z.string().trim().startsWith("https://hooks.slack.com/", "Use a Slack incoming webhook URL (https://hooks.slack.com/…)"),
+  botToken: z.string().trim().max(300).refine((v) => v === "" || v.startsWith("xoxb-"), "Slack bot tokens start with xoxb-").optional(),
+  teamDomain: z.string().trim().max(63).optional(),
 });
 const providerParam = z.enum(["github", "jira", "slack"]);
+
+platformRouter.post(
+  "/api/integrations/jira/automation",
+  route(async (req, { user, workspaceId }) => {
+    await assertWorkspaceAdmin(workspaceId, user.id);
+    const { enabled } = z.object({ enabled: z.boolean() }).parse(req.body ?? {});
+    await workspaceIntegrations.setJiraCommitAutomation(workspaceId, enabled);
+    return {
+      message: enabled
+        ? "Commits that mention a Jira key will move that issue to In Progress"
+        : "Commits will no longer move Jira issues",
+    };
+  }),
+);
 
 platformRouter.post(
   "/api/integrations/:provider",

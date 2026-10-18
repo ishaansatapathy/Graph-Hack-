@@ -38,7 +38,7 @@ interface AuditItem {
   createdAt: string;
 }
 
-const FIELDS: Record<Provider, { name: string; label: string; type?: string; placeholder: string }[]> = {
+const FIELDS: Record<Provider, { name: string; label: string; type?: string; placeholder: string; optional?: boolean }[]> = {
   github: [
     { name: "repositoryFullName", label: "Repository", placeholder: "owner/name" },
     { name: "personalAccessToken", label: "Personal access token", type: "password", placeholder: "github_pat_…" },
@@ -48,7 +48,11 @@ const FIELDS: Record<Provider, { name: string; label: string; type?: string; pla
     { name: "email", label: "Account email", type: "email", placeholder: "you@company.com" },
     { name: "apiToken", label: "API token", type: "password", placeholder: "Atlassian API token" },
   ],
-  slack: [{ name: "webhookUrl", label: "Incoming webhook URL", type: "password", placeholder: "https://hooks.slack.com/services/…" }],
+  slack: [
+    { name: "webhookUrl", label: "Incoming webhook URL", type: "password", placeholder: "https://hooks.slack.com/services/…" },
+    { name: "botToken", label: "Bot token (optional, to read channels)", type: "password", placeholder: "xoxb-…", optional: true },
+    { name: "teamDomain", label: "Workspace slug (optional, for message links)", placeholder: "your-team", optional: true },
+  ],
 };
 
 const META: Record<Provider, { title: string; icon: React.ReactNode; about: string }> = {
@@ -58,7 +62,11 @@ const META: Record<Provider, { title: string; icon: React.ReactNode; about: stri
     about: "Lets the IDE browse and commit to the repository, and adds diff evidence to conflicts.",
   },
   jira: { title: "Jira", icon: <Ticket className="size-4" />, about: "Syncs issues into the workspace graph so commits and conflicts can reference them." },
-  slack: { title: "Slack", icon: <MessageSquare className="size-4" />, about: "Posts push updates to a channel through an incoming webhook." },
+  slack: {
+    title: "Slack",
+    icon: <MessageSquare className="size-4" />,
+    about: "Posts push updates through an incoming webhook. With a bot token, Sync now also reads public channels and links messages that name files or functions to the code.",
+  },
 };
 
 export function IntegrationsView() {
@@ -114,6 +122,9 @@ export function IntegrationsView() {
             }
             onTest={() => act(`${it.provider}:test`, () => apiFetch(`/api/integrations/${it.provider}/test`, { method: "POST", body: {} }))}
             onSync={() => act(`${it.provider}:sync`, () => apiFetch(`/api/integrations/${it.provider}/sync`, { method: "POST", body: {} }))}
+            onToggleAutoMove={(enabled) =>
+              void act("jira:automation", () => apiFetch("/api/integrations/jira/automation", { method: "POST", body: { enabled } }))
+            }
             onDisconnect={() => {
               if (!window.confirm(`Disconnect ${META[it.provider].title}? Its stored credentials are deleted.`)) return;
               void act(`${it.provider}:remove`, async () => {
@@ -224,6 +235,7 @@ function IntegrationCard({
   onTest,
   onSync,
   onDisconnect,
+  onToggleAutoMove,
 }: {
   item: IntegrationSummary;
   canManage: boolean;
@@ -232,12 +244,14 @@ function IntegrationCard({
   onTest: () => void;
   onSync: () => void;
   onDisconnect: () => void;
+  onToggleAutoMove?: (enabled: boolean) => void;
 }) {
   const meta = META[item.provider];
   const [editing, setEditing] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const p = item.provider;
-  const shown = Object.entries(item.maskedSecrets).filter(([, v]) => v);
+  const shown = Object.entries(item.maskedSecrets).filter(([k, v]) => v && k !== "autoTransitionOnCommit");
+  const autoMove = item.maskedSecrets.autoTransitionOnCommit === "true";
 
   return (
     <div className="flex flex-col rounded-lg border border-line bg-surface-1 p-5">
@@ -264,6 +278,21 @@ function IntegrationCard({
         </dl>
       )}
 
+      {p === "jira" && item.configured && (
+        <label className="mb-3 flex items-start gap-2 text-[12px] leading-relaxed text-fg-2">
+          <input
+            type="checkbox"
+            checked={autoMove}
+            disabled={!canManage || busy === "jira:automation"}
+            onChange={(e) => onToggleAutoMove?.(e.target.checked)}
+            className="mt-0.5 accent-[var(--accent)]"
+          />
+          <span>
+            Move an issue to <span className="text-fg">In Progress</span> when a pushed commit mentions its key (for example SF-12)
+          </span>
+        </label>
+      )}
+
       {editing && canManage ? (
         <form
           onSubmit={(e) => {
@@ -284,7 +313,7 @@ function IntegrationCard({
                 type={f.type ?? "text"}
                 placeholder={f.placeholder}
                 autoComplete="off"
-                required={!(p === "github" && f.name === "personalAccessToken" && item.configured)}
+                required={!f.optional && !(p === "github" && f.name === "personalAccessToken" && item.configured)}
                 value={values[f.name] ?? ""}
                 onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
                 className="mt-1 w-full rounded border border-line bg-surface-2 px-2.5 py-1.5 text-[12px] text-fg focus:border-accent focus:outline-none"
