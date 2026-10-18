@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useReducer, useRef } from "react";
-import { api } from "./api";
+import { api, ApiRequestError } from "./api";
 import type {
   Agent,
+  CodeFile,
   EvidencePath,
   FixProposal,
   GraphEdge,
@@ -22,12 +23,15 @@ export type StreamState = "idle" | "connecting" | "live" | "ended" | "error";
 export interface DashboardState {
   load: "loading" | "ready" | "error";
   loadError?: string;
+  /** HTTP status of the failed load, e.g. 401 when signed out */
+  loadStatus?: number;
   snapshot: ScenarioSnapshot | null;
   agents: Agent[];
   changes: ProposedChange[];
   nodes: GraphNode[];
   edges: GraphEdge[];
   incidents: Incident[];
+  files: CodeFile[];
   phase: Phase;
   log: ToolCallEvent[];
   evidence: EvidencePath | null;
@@ -38,16 +42,19 @@ export interface DashboardState {
   focus: { nodeIds: string[]; at: number } | null;
   stream: StreamState;
   streamError?: string;
-  /** last event `at` (ms since run start) */
+  /** last event `at` (ms since the stream connected) */
   clock: number;
   runId: number;
+  importing: boolean;
+  importError?: string;
 }
 
 type Action =
   | { type: "loaded"; snapshot: ScenarioSnapshot }
-  | { type: "loadFailed"; error: string }
+  | { type: "loadFailed"; error: string; status?: number }
   | { type: "reload" }
   | { type: "reset" }
+  | { type: "import"; state: "start" | "done" | "failed"; error?: string }
   | { type: "stream"; state: StreamState; error?: string }
   | { type: "event"; ev: StreamEvent };
 
@@ -59,6 +66,7 @@ const initial: DashboardState = {
   nodes: [],
   edges: [],
   incidents: [],
+  files: [],
   phase: "idle",
   log: [],
   evidence: null,
@@ -69,19 +77,31 @@ const initial: DashboardState = {
   stream: "idle",
   clock: 0,
   runId: 0,
+  importing: false,
 };
 
+function initialPhase(s: ScenarioSnapshot): Phase {
+  if (s.evidence.length) return "evidence";
+  if (s.changes.length) return "working";
+  return "idle";
+}
+
+/** Replaces graph state with the backend's view; the live log and stream survive. */
 function fromSnapshot(s: ScenarioSnapshot, prev: DashboardState): DashboardState {
   return {
-    ...initial,
+    ...prev,
     load: "ready",
+    loadError: undefined,
+    loadStatus: undefined,
     snapshot: s,
     agents: s.agents,
     changes: s.changes,
     nodes: s.nodes,
     edges: s.edges,
     incidents: s.incidents,
-    runId: prev.runId,
+    files: s.files,
+    evidence: s.evidence[s.evidence.length - 1] ?? null,
+    phase: initialPhase(s),
   };
 }
 
@@ -104,9 +124,20 @@ function apply(state: DashboardState, ev: StreamEvent): DashboardState {
       case "agent":
         s.agents = s.agents.map((a) => (a.id === p.id ? { ...a, status: p.status } : a));
         break;
+      case "agentUpsert":
+        s.agents = upsert(s.agents, p.agent);
+        break;
       case "change":
         s.changes = s.changes.map((c) => (c.id === p.id ? { ...c, status: p.status } : c));
         break;
+      case "changeUpsert":
+        s.changes = upsert(s.changes, p.change);
+        break;
+      case "file": {
+        const i = s.files.findIndex((f) => f.path === p.file.path && f.changeId === p.file.changeId);
+        s.files = i === -1 ? [...s.files, p.file] : s.files.map((f, j) => (j === i ? p.file : f));
+        break;
+      }
       case "risk":
         s.changes = s.changes.map((c) => {
           const r = p.ranks.find((x) => x.changeId === c.id);
@@ -148,13 +179,13 @@ function reducer(state: DashboardState, action: Action): DashboardState {
     case "loaded":
       return fromSnapshot(action.snapshot, state);
     case "loadFailed":
-      return { ...state, load: "error", loadError: action.error };
+      return { ...state, load: "error", loadError: action.error, loadStatus: action.status };
     case "reload":
       return { ...state, load: "loading", loadError: undefined };
     case "reset":
-      return state.snapshot
-        ? { ...fromSnapshot(state.snapshot, state), runId: state.runId + 1, stream: "connecting" }
-        : state;
+      return { ...state, log: [], clock: 0, pulses: {}, focus: null, runId: state.runId + 1, stream: "connecting", streamError: undefined };
+    case "import":
+      return { ...state, importing: action.state === "start", importError: action.state === "failed" ? action.error : undefined };
     case "stream":
       return { ...state, stream: action.state, streamError: action.error };
     case "event":
@@ -162,38 +193,52 @@ function reducer(state: DashboardState, action: Action): DashboardState {
   }
 }
 
-export function useScenario({ speed = 1 }: { speed?: number } = {}) {
+export function useScenario() {
   const [state, dispatch] = useReducer(reducer, initial);
   const unsub = useRef<(() => void) | null>(null);
-  const [loadKey, bump] = useReducer((n: number) => n + 1, 0);
 
-  useEffect(() => {
-    const ctrl = new AbortController();
-    api
-      .scenario(ctrl.signal)
+  const load = useCallback((signal?: AbortSignal) => {
+    return api
+      .scenario(signal)
       .then((snapshot) => dispatch({ type: "loaded", snapshot }))
       .catch((err: Error) => {
-        if (!ctrl.signal.aborted) dispatch({ type: "loadFailed", error: err.message });
+        if (!signal?.aborted) dispatch({ type: "loadFailed", error: err.message, status: err instanceof ApiRequestError ? err.status : undefined });
       });
-    return () => ctrl.abort();
-  }, [loadKey]);
-
-  const retry = useCallback(() => {
-    dispatch({ type: "reload" });
-    bump();
   }, []);
 
-  const run = useCallback(() => {
+  const connect = useCallback(() => {
     unsub.current?.();
     dispatch({ type: "reset" });
     unsub.current = api.events({
-      speed,
       onOpen: () => dispatch({ type: "stream", state: "live" }),
       onEvent: (ev) => dispatch({ type: "event", ev }),
       onEnd: () => dispatch({ type: "stream", state: "ended" }),
       onError: (error) => dispatch({ type: "stream", state: "error", error }),
     });
-  }, [speed]);
+  }, []);
+
+  // Load the workspace graph, then follow it live.
+  useEffect(() => {
+    const ctrl = new AbortController();
+    load(ctrl.signal).then(() => {
+      if (!ctrl.signal.aborted) connect();
+    });
+    return () => {
+      ctrl.abort();
+      unsub.current?.();
+      unsub.current = null;
+    };
+  }, [load, connect]);
+
+  const retry = useCallback(() => {
+    dispatch({ type: "reload" });
+    load().then(connect);
+  }, [load, connect]);
+
+  /** Re-syncs with the backend and reopens the stream. */
+  const reconnect = useCallback(() => {
+    load().then(connect);
+  }, [load, connect]);
 
   const stop = useCallback(() => {
     unsub.current?.();
@@ -201,7 +246,20 @@ export function useScenario({ speed = 1 }: { speed?: number } = {}) {
     dispatch({ type: "stream", state: "ended" });
   }, []);
 
-  useEffect(() => () => unsub.current?.(), []);
+  const importRepo = useCallback(
+    async (repo: string) => {
+      dispatch({ type: "import", state: "start" });
+      try {
+        await api.importRepo(repo);
+        dispatch({ type: "import", state: "done" });
+      } catch (err) {
+        dispatch({ type: "import", state: "failed", error: (err as Error).message });
+      }
+      // Reconcile with what the graph actually holds now.
+      await load();
+    },
+    [load],
+  );
 
-  return { state, run, stop, retry };
+  return { state, reconnect, stop, retry, importRepo };
 }
