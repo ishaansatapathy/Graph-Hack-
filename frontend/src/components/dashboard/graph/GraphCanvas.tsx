@@ -30,7 +30,7 @@ export function GraphSkeleton() {
   );
 }
 
-const LEGEND: NodeKind[] = ["endpoint", "schema", "field", "function", "test", "change", "incident"];
+const LEGEND: NodeKind[] = ["change", "file", "function", "test", "issue", "incident"];
 
 export function GraphCanvas(props: GraphCanvasProps) {
   return (
