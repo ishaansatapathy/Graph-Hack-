@@ -8,7 +8,7 @@ Stackfox imports a GitHub repository's branches, writes every pending change, fi
 
 | | |
 |---|---|
-| **Live demo** | _add deployment URL_ |
+| **Live demo** | [graph-hack-1.onrender.com](https://graph-hack-1.onrender.com/) · API: [graph-hack-t03w.onrender.com/health](https://graph-hack-t03w.onrender.com/health) _(free tier, may take ~50 s to wake)_ |
 | **Demo video** | _add video link_ |
 | **Stack** | FalkorDB · Next.js 16 · Express + tRPC · Neon Postgres · OpenRouter / OpenAI · Render |
 
