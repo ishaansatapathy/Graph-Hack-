@@ -1,0 +1,27 @@
+{
+  "name": "@stackfox/web",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "dotenv -e ../../.env -- next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stackfox/services": "*",
+    "@stackfox/trpc": "*",
+    "@trpc/client": "^11.8.1",
+    "google-auth-library": "^9.15.1",
+    "next": "^15.5.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "dotenv-cli": "^11.0.0",
+    "typescript": "^5.9.3"
+  }
+}

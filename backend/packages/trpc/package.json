@@ -1,0 +1,27 @@
+{
+  "name": "@stackfox/trpc",
+  "version": "0.0.1",
+  "private": true,
+  "exports": {
+    ".": "./server/index.ts",
+    "./client": "./client/index.ts",
+    "./server": "./server/index.ts",
+    "./server/services": "./server/services/index.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stackfox/services": "*",
+    "@trpc/client": "^11.8.1",
+    "@trpc/server": "^11.8.1",
+    "@types/express": "^5.0.6",
+    "falkordb": "^6.3.0",
+    "trpc-to-openapi": "^3.1.0",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.9.3"
+  }
+}

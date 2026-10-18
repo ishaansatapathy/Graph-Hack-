@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "paths": {
+      "@stackfox/services": ["../services/src/index.ts"],
+      "@stackfox/services/*": ["../services/src/*"]
+    }
+  },
+  "include": ["server/", "client/"]
+}
