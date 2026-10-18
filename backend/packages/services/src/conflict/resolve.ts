@@ -22,9 +22,10 @@ async function buildConflictContext(workspaceId: string, conflict: ConflictRecor
   // Decisions that constrain the conflicted file
   const decisions = await graphRead(
     workspaceId,
-    `MATCH (dec:Decision)-[:CONSTRAINS]->(f:Function)
-     WHERE f.file = $file OR f.file CONTAINS $fileBase
-     RETURN dec.title AS title, dec.rationale AS rationale, dec.status AS status
+    `MATCH (dec:Decision)-[:CONSTRAINS]->(t)
+     WHERE (labels(t)[0] = 'Function' AND (t.file = $file OR t.file CONTAINS $fileBase))
+        OR (labels(t)[0] = 'File' AND t.path = $file)
+     RETURN DISTINCT dec.title AS title, dec.rationale AS rationale, dec.status AS status
      LIMIT 5`,
     {
       file: conflict.file,
@@ -41,9 +42,10 @@ async function buildConflictContext(workspaceId: string, conflict: ConflictRecor
   // Discussions mentioning the file
   const discussions = await graphRead(
     workspaceId,
-    `MATCH (d:Discussion)-[:CONCERNS]->(f:Function)
-     WHERE f.file = $file OR f.file CONTAINS $fileBase
-     RETURN d.author AS author, d.text AS text, d.channel AS channel
+    `MATCH (d:Discussion)-[:CONCERNS]->(t)
+     WHERE (labels(t)[0] = 'Function' AND (t.file = $file OR t.file CONTAINS $fileBase))
+        OR (labels(t)[0] = 'File' AND t.path = $file)
+     RETURN DISTINCT d.author AS author, d.text AS text, d.channel AS channel
      LIMIT 5`,
     {
       file: conflict.file,

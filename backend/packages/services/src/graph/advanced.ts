@@ -199,13 +199,28 @@ export function authorsOutsideUsualArea(owners: { author: string; commits: numbe
 
 /** Issues linked to a file through the commits or imported branches that changed it. */
 export async function fileLinkedWork(workspaceId: string, file: string) {
-  const rows = await tryFalkor(
-    workspaceId,
-    `MATCH (f:File {path: $file})<-[:MODIFIED|MODIFIES]-(c)-[:REFERENCES]->(i:Issue)
-     RETURN DISTINCT i.key AS key, i.title AS title, i.status AS status LIMIT 10`,
-    { file },
-  );
-  return (rows ?? []).map((r) => ({ key: String(r.key), title: String(r.title ?? ""), status: String(r.status ?? "") }));
+  const [viaChanges, viaMentions] = await Promise.all([
+    tryFalkor(
+      workspaceId,
+      `MATCH (f:File {path: $file})<-[:MODIFIED|MODIFIES]-(c)-[:REFERENCES]->(i:Issue)
+       RETURN DISTINCT i.key AS key, i.title AS title, i.status AS status LIMIT 10`,
+      { file },
+    ),
+    // Jira issues whose summary names the file or one of its functions.
+    tryFalkor(
+      workspaceId,
+      `MATCH (i:Issue)-[:CONCERNS]->(t)
+       WHERE (labels(t)[0] = 'File' AND t.path = $file) OR (labels(t)[0] = 'Function' AND t.file = $file)
+       RETURN DISTINCT i.key AS key, i.title AS title, i.status AS status LIMIT 10`,
+      { file },
+    ),
+  ]);
+  const issues = new Map<string, { key: string; title: string; status: string }>();
+  for (const r of [...(viaChanges ?? []), ...(viaMentions ?? [])]) {
+    const key = String(r.key);
+    if (!issues.has(key)) issues.set(key, { key, title: String(r.title ?? ""), status: String(r.status ?? "") });
+  }
+  return [...issues.values()].slice(0, 10);
 }
 
 /** Hover-card context for a file: owners, dependants and linked work items. */

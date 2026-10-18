@@ -15,6 +15,7 @@
 
 import { graphWrite } from "../graph/falkordb";
 import { graphRead } from "../graph/falkordb";
+import { linkConversationToCode, type ConversationItem } from "../graph/discussions";
 import { decryptJson } from "../workspace/secrets";
 import * as workspaceDb from "../workspace/db";
 
@@ -26,6 +27,9 @@ export type SlackSyncResult = {
   channels: number;
   mentions: number;
   mode: "full" | "webhook-only";
+  /** Messages that name a file or function in the graph, and how many read as decisions. */
+  codeLinks?: number;
+  decisions?: number;
 };
 
 type SlackChannel = { id: string; name: string };
@@ -66,6 +70,7 @@ export async function syncSlackToGraph(workspaceId: string): Promise<SlackSyncRe
   const channels = chanData.channels.slice(0, MAX_CHANNELS);
   let totalMessages = 0;
   let totalMentions = 0;
+  const conversation: ConversationItem[] = [];
 
   for (const channel of channels) {
     // Upsert channel node
@@ -102,6 +107,15 @@ export async function syncSlackToGraph(workspaceId: string): Promise<SlackSyncRe
         { ts: msg.ts, channelId: channel.id, text, user: msg.user ?? "unknown", msgUrl },
       );
 
+      conversation.push({
+        id: `${channel.id}:${msg.ts}`,
+        text: msg.text.slice(0, 500),
+        author: msg.user ?? "unknown",
+        channel: channel.name,
+        url: msgUrl,
+        source: "slack",
+      });
+
       // Link to channel
       await graphWrite(
         workspaceId,
@@ -134,5 +148,13 @@ export async function syncSlackToGraph(workspaceId: string): Promise<SlackSyncRe
     }
   }
 
-  return { messages: totalMessages, channels: channels.length, mentions: totalMentions, mode: "full" };
+  const code = await linkConversationToCode(workspaceId, conversation);
+  return {
+    messages: totalMessages,
+    channels: channels.length,
+    mentions: totalMentions,
+    mode: "full",
+    codeLinks: code.linked,
+    decisions: code.decisions,
+  };
 }

@@ -10,6 +10,7 @@
  */
 
 import { upsertChunks } from "../graph/chunks";
+import { linkConversationToCode, type ConversationItem } from "../graph/discussions";
 import { graphWrite } from "../graph/falkordb";
 import { normalizeJiraCloudBaseUrl } from "../integrations/config";
 import { decryptJson } from "../workspace/secrets";
@@ -20,6 +21,9 @@ const MAX_ISSUES = 200;
 export type JiraSyncResult = {
   issues: number;
   skipped: number;
+  /** Issues that name a file or function in the graph, and how many are recorded decisions. */
+  codeLinks?: number;
+  decisions?: number;
 };
 
 type JiraIssue = {
@@ -51,23 +55,39 @@ export async function syncJiraToGraph(workspaceId: string): Promise<JiraSyncResu
   const basic = Buffer.from(`${email}:${apiToken}`).toString("base64");
 
   let startAt = 0;
-  let total = 0;
   let upserted = 0;
   let skipped = 0;
+  let nextPageToken: string | undefined;
+  let useJqlEndpoint = false;
+  let more = true;
+  const conversation: ConversationItem[] = [];
+  const headers = { Authorization: `Basic ${basic}`, Accept: "application/json" };
+  const query = "jql=ORDER+BY+updated+DESC&maxResults=50&fields=summary,status,priority,assignee,labels,issuetype";
 
   do {
-    const url = `${baseUrl}/rest/api/3/search?jql=ORDER+BY+updated+DESC&maxResults=50&startAt=${startAt}&fields=summary,status,priority,assignee,labels,issuetype`;
-    const resp = await fetch(url, {
-      headers: { Authorization: `Basic ${basic}`, Accept: "application/json" },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!resp.ok) throw new Error(`Jira search returned ${resp.status}`);
+    let data: { total?: number; issues: JiraIssue[]; nextPageToken?: string; isLast?: boolean };
+    if (!useJqlEndpoint) {
+      const resp = await fetch(`${baseUrl}/rest/api/3/search?${query}&startAt=${startAt}`, { headers, signal: AbortSignal.timeout(15_000) });
+      // Atlassian retired GET /rest/api/3/search on Jira Cloud; /search/jql replaces it with token paging.
+      if (resp.status === 404 || resp.status === 410) {
+        useJqlEndpoint = true;
+        continue;
+      }
+      if (!resp.ok) throw new Error(`Jira search returned ${resp.status}`);
+      data = (await resp.json()) as typeof data;
+    } else {
+      const page = nextPageToken ? `&nextPageToken=${encodeURIComponent(nextPageToken)}` : "";
+      const resp = await fetch(`${baseUrl}/rest/api/3/search/jql?${query}${page}`, { headers, signal: AbortSignal.timeout(15_000) });
+      if (!resp.ok) throw new Error(`Jira search returned ${resp.status}`);
+      data = (await resp.json()) as typeof data;
+    }
 
-    const data = (await resp.json()) as { total: number; issues: JiraIssue[] };
-    if (!Array.isArray(data.issues) || (data.issues.length === 0 && startAt < data.total)) {
+    if (!Array.isArray(data.issues)) {
       throw new Error("Jira returned an incomplete issue page; sync stopped to avoid reporting partial data as current");
     }
-    total = data.total;
+    if (!useJqlEndpoint && data.issues.length === 0 && startAt < (data.total ?? 0)) {
+      throw new Error("Jira returned an incomplete issue page; sync stopped to avoid reporting partial data as current");
+    }
 
     for (const issue of data.issues) {
       try {
@@ -115,6 +135,15 @@ export async function syncJiraToGraph(workspaceId: string): Promise<JiraSyncResu
         await upsertChunks(workspaceId, { type: "Issue", keyProp: "key", keyValue: key, label: key }, chunkText)
           .catch(() => {/* non-fatal */});
 
+        conversation.push({
+          id: key,
+          text: issue.fields.summary ?? "",
+          author: assignee || "unassigned",
+          channel: "jira",
+          url: issueUrl,
+          source: "jira",
+          labels: issue.fields.labels ?? [],
+        });
         upserted++;
       } catch {
         skipped++;
@@ -122,7 +151,14 @@ export async function syncJiraToGraph(workspaceId: string): Promise<JiraSyncResu
     }
 
     startAt += data.issues.length;
-  } while (startAt < total && startAt < MAX_ISSUES);
+    if (useJqlEndpoint) {
+      nextPageToken = data.nextPageToken;
+      more = Boolean(nextPageToken) && data.isLast !== true && data.issues.length > 0;
+    } else {
+      more = startAt < (data.total ?? 0);
+    }
+  } while (more && startAt < MAX_ISSUES);
 
-  return { issues: upserted, skipped };
+  const code = await linkConversationToCode(workspaceId, conversation);
+  return { issues: upserted, skipped, codeLinks: code.linked, decisions: code.decisions };
 }

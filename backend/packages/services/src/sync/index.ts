@@ -37,12 +37,12 @@ async function executeSyncRun(run: { id: string; workspaceId: string; provider: 
     if (run.provider === "jira") {
       const result = await syncJiraToGraph(run.workspaceId);
       items = result.issues;
-      message = `Synced ${result.issues} issues (${result.skipped} skipped)`;
+      message = `Synced ${result.issues} issues (${result.skipped} skipped) · ${result.codeLinks ?? 0} linked to code · ${result.decisions ?? 0} decisions`;
     } else if (run.provider === "slack") {
       const result = await syncSlackToGraph(run.workspaceId);
       items = result.messages;
       message = result.mode === "full"
-        ? `Synced ${result.messages} messages across ${result.channels} channels, ${result.mentions} Issue mentions`
+        ? `Synced ${result.messages} messages across ${result.channels} channels, ${result.mentions} Issue mentions, ${result.codeLinks ?? 0} linked to code, ${result.decisions ?? 0} decisions`
         : "Webhook-only mode — add a Slack bot token for full message ingestion";
     } else {
       throw new Error("Unknown integration sync provider");
