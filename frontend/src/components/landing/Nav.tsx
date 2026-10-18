@@ -5,9 +5,9 @@ export function Nav() {
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-line bg-bg/70 backdrop-blur-md">
       <nav className="mx-auto flex h-14 max-w-[1200px] items-center justify-between px-6 md:px-10">
-        <Link href="/" className="flex items-center gap-2" aria-label="SYNK home">
+        <Link href="/" className="flex items-center gap-2" aria-label="Stackfox home">
           <Logo className="size-[18px] text-accent" />
-          <span className="text-[13px] font-semibold tracking-[0.12em]">SYNK</span>
+          <span className="text-[13px] font-semibold tracking-[0.12em]">STACKFOX</span>
         </Link>
         <div className="hidden items-center gap-7 text-[13px] text-fg-2 md:flex">
           <a href="#problem" className="transition-colors hover:text-fg">Problem</a>
