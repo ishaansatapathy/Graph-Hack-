@@ -76,6 +76,17 @@ function isMissingGraph(error: unknown) {
   return /empty key|invalid graph operation|graph.*not.*exist/i.test(message);
 }
 
+/** Socket-level failures mean the engine is down; anything else is a problem with the query. */
+function isConnectionError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EPIPE|socket|connection|closed|timeout|NOAUTH|WRONGPASS/i.test(message);
+}
+
+function markUnavailable() {
+  isFalkorDbAvailable = false;
+  client = null;
+}
+
 export async function graphRead(
   workspaceId: string,
   cypher: string,
@@ -89,8 +100,9 @@ export async function graphRead(
     }
   } catch (error) {
     if (isMissingGraph(error)) return [];
-    // If FalkorDB query fails, fall back to embedded store
-    isFalkorDbAvailable = false;
+    // A bad query must not take the engine offline for every other request.
+    if (!isConnectionError(error)) throw error;
+    markUnavailable();
     requireEmbeddedFallback();
   }
 
@@ -111,7 +123,8 @@ export async function graphWrite(
       return await graph.query(cypher, { params });
     }
   } catch (error) {
-    isFalkorDbAvailable = false;
+    if (!isConnectionError(error)) throw error;
+    markUnavailable();
     requireEmbeddedFallback();
   }
 
