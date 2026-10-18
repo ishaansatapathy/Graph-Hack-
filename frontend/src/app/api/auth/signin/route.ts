@@ -29,7 +29,7 @@ export async function POST(req: Request) {
     return Response.json({ error: `Stackfox backend isn't reachable at ${BACKEND}` }, { status: 503 });
   }
   if (body.method === "github") {
-    return Response.json({ redirect: `${BACKEND}/auth/github?returnTo=/app` });
+    return Response.json({ redirect: "/api-auth/github?returnTo=/app" });
   }
   return Response.json({ redirect: `${BACKEND}/auth/dev-login?email=${encodeURIComponent(email)}&returnTo=/app` });
 }
