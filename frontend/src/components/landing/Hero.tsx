@@ -8,7 +8,7 @@ const LINES: { text: string; tone: string }[] = [
   { text: "Git merged it.", tone: "text-fg-2" },
   { text: "CI passed.", tone: "text-fg-2" },
   { text: "Production would have broken.", tone: "text-fg" },
-  { text: "SYNK caught it.", tone: "text-fg" },
+  { text: "Stackfox caught it.", tone: "text-fg" },
 ];
 
 /* Word-by-word reveal timed in CSS so the headline paints without waiting
@@ -58,7 +58,7 @@ export function Hero() {
           ))}
         </h1>
         <p className="hero-fade mt-10 max-w-[56ch] text-[17px] leading-[1.65] text-fg-2" style={{ animationDelay: `${FADE_AT}ms` }}>
-          Every branch green. Combined, broken. SYNK sees every agent&apos;s change as one graph — and catches it before merge.
+          Every branch green. Combined, broken. Stackfox sees every agent&apos;s change as one graph — and catches it before merge.
         </p>
         <div className="hero-fade mt-10 flex flex-wrap items-center gap-3" style={{ animationDelay: `${FADE_AT + 80}ms` }}>
           <Link
