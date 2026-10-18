@@ -55,13 +55,17 @@ async function main() {
     for (const filename of entries) {
       const tag = filename.slice(0, -4);
       const source = await fs.readFile(path.join(migrationDirectory, filename), "utf8");
-      const checksum = crypto.createHash("sha256").update(source).digest("hex");
+      const sha = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
+      // Git may check files out with LF or CRLF; a migration applied on one OS must still verify on another.
+      const lf = source.replace(/\r\n/g, "\n");
+      const accepted = new Set([sha(source), sha(lf), sha(lf.replace(/\n/g, "\r\n"))]);
+      const checksum = sha(lf);
       const [applied] = (await client.query<{ checksum: string }>(
         "SELECT checksum FROM public.stackfox_migrations WHERE tag = $1",
         [tag],
       )).rows;
       if (applied) {
-        if (applied.checksum !== checksum) throw new Error(`Applied migration ${tag} has changed; create a new migration instead`);
+        if (!accepted.has(applied.checksum)) throw new Error(`Applied migration ${tag} has changed; create a new migration instead`);
         continue;
       }
 
