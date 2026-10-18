@@ -1,3 +1,4 @@
+import { indexCodeFiles } from "../graph/code-index";
 import { graphRead, graphWrite } from "../graph/falkordb";
 import { extractJiraKeys } from "../github/push-schema";
 import * as workspaceDb from "../workspace/db";
@@ -368,6 +369,7 @@ async function runImport(workspaceId: string, repo: string) {
 
   // Base-branch content once per file, branch content per (change, file).
   const contentDone = new Set<string>();
+  const sources = new Map<string, string>();
   let contentFiles = 0;
   for (const { a, b, file } of conflicts) {
     const id = `${fullName}:${a.branch}|${b.branch}:${file}`;
@@ -389,6 +391,8 @@ async function runImport(workspaceId: string, repo: string) {
         if (side.isDefault || contentDone.has(key)) continue;
         contentDone.add(key);
         const [original, modified] = await Promise.all([gh.raw(fullName, file, base), gh.raw(fullName, file, side.branch)]);
+        // Index functions from the default branch; a file new on the branch has no base content.
+        if (!sources.get(file)) sources.set(file, original || modified);
         await graphWrite(workspaceId, `MATCH (f:File {path: $file}) SET f.baseContent = $original`, { file, original });
         await graphWrite(workspaceId, `MATCH (c:Change {id: $id})-[m:MODIFIES]->(f:File {path: $file}) SET m.content = $modified`, { id: side.id, file, modified });
         emit(workspaceId, { actor: "github", kind: "action", message: `Fetched ${file} @ ${base} and @ ${side.branch}` }, [
@@ -454,6 +458,23 @@ async function runImport(workspaceId: string, repo: string) {
         { op: "pulse", nodeIds: [conflictNode, `change:${a.id}`, `change:${b.id}`] },
       ],
     );
+  }
+
+  if (sources.size > 0) {
+    const t2 = performance.now();
+    emit(workspaceId, { actor: "stackfox", kind: "tool_call", tool: "index_code", args: { files: [...sources.keys()] }, message: "index_code" });
+    const indexed = await indexCodeFiles(workspaceId, [...sources].map(([path, source]) => ({ path, source })))
+      .catch((error: unknown) => {
+        console.warn("[import] code index skipped", error instanceof Error ? error.message : error);
+        return null;
+      });
+    emit(workspaceId, {
+      actor: "stackfox",
+      kind: "tool_result",
+      tool: "index_code",
+      durationMs: Math.round(performance.now() - t2),
+      message: indexed ? `${indexed.functions} functions · ${indexed.calls} calls from ${indexed.files} files` : "code index skipped",
+    });
   }
 
   emit(
