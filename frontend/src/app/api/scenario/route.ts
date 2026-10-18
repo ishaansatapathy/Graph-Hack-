@@ -1,11 +1,7 @@
 import { connection } from "next/server";
-import { getScenario } from "@/server/source";
+import { proxyJson } from "@/server/source";
 
-export async function GET() {
+export async function GET(req: Request) {
   await connection();
-  try {
-    return Response.json(await getScenario());
-  } catch (err) {
-    return Response.json({ error: (err as Error).message }, { status: 502 });
-  }
+  return proxyJson(req, "/live/scenario");
 }
