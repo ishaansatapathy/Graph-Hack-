@@ -1,4 +1,4 @@
-/* Shared contract between the SYNK backend and the UI.
+/* Shared contract between the Stackfox backend and the UI.
    The UI never constructs these values itself — they arrive from /api/*. */
 
 export type AgentSlot = "a" | "b" | "c";
@@ -37,7 +37,9 @@ export type NodeKind =
   | "function"
   | "test"
   | "change"
-  | "incident";
+  | "incident"
+  | "file"
+  | "issue";
 
 export interface GraphNode {
   id: string;
@@ -59,7 +61,9 @@ export type EdgeKind =
   | "MODIFIES"
   | "INTRODUCES"
   | "INVOLVED"
-  | "SIMILAR_TO";
+  | "SIMILAR_TO"
+  // any other relationship type stored in the workspace graph
+  | (string & {});
 
 export interface GraphEdge {
   id: string;
@@ -137,7 +141,7 @@ export interface CodeFile {
   anchors: CodeAnchor[];
 }
 
-export type Actor = string; // agent id | "synk" | "git" | "ci"
+export type Actor = string; // agent id | "stackfox" | "synk" | "git" | "ci"
 
 export type LogKind =
   | "system"
@@ -178,7 +182,10 @@ export type Phase =
 export type StatePatch =
   | { op: "phase"; phase: Phase }
   | { op: "agent"; id: string; status: AgentStatus }
+  | { op: "agentUpsert"; agent: Agent }
   | { op: "change"; id: string; status: ChangeStatus }
+  | { op: "changeUpsert"; change: ProposedChange }
+  | { op: "file"; file: CodeFile }
   | { op: "risk"; ranks: { changeId: string; risk: number }[] }
   | { op: "evidence"; path: EvidencePath }
   | { op: "test"; run: TestRun }
@@ -199,13 +206,18 @@ export interface StreamEvent {
 export interface ScenarioSnapshot {
   sessionId: string;
   graphName: string;
-  repo: string;
+  engine: "falkordb" | "embedded";
+  workspace: { id: string; name: string };
+  /** most recently imported repository, null until one is imported */
+  repo: string | null;
   agents: Agent[];
   changes: ProposedChange[];
   nodes: GraphNode[];
   edges: GraphEdge[];
   incidents: Incident[];
   files: CodeFile[];
+  /** evidence paths for the open conflicts, newest last */
+  evidence: EvidencePath[];
   mcpTools: { name: string; description: string }[];
   /** expected length of a full run, for the progress bar */
   durationMs: number;
@@ -213,4 +225,9 @@ export interface ScenarioSnapshot {
 
 export interface ApiError {
   error: string;
+}
+
+export interface ImportResult {
+  ok: true;
+  repo: string;
 }
