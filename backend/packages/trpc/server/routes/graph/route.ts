@@ -6,6 +6,7 @@ import {
   checkFalkorDbConnection,
   completeWithGraphContext,
   detectConflicts,
+  fileInsight,
   graphChunks,
   graphEngine,
   graphRagAnswer,
@@ -207,6 +208,17 @@ export const graphRouter = router({
         }
       }),
   }),
+
+  fileInsight: protectedProcedure
+    .input(ws.extend({ file: z.string().min(1).max(500) }))
+    .query(async ({ ctx, input }) => {
+      try {
+        await assertWorkspaceMember(input.workspaceId, ctx.user.id);
+        return await fileInsight(input.workspaceId, input.file);
+      } catch (error) {
+        mapServiceError(error);
+      }
+    }),
 
   // ── Conflict detection + resolution ──────────────────────────────────────
   conflicts: router({

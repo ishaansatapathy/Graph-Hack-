@@ -5,6 +5,7 @@
  * relevance ranking, then capped relationship expansion.
  */
 
+import { connectingPath, describePath, ensureGraphIndexes, fullTextSeeds, multiHopContext } from "./advanced";
 import { graphRead } from "./falkordb";
 
 // ---------------------------------------------------------------------------
@@ -225,9 +226,21 @@ export async function graphRagAnswer(workspaceId: string, question: string): Pro
     };
   }
 
-  // Step 1: find seeds
-  const seeds = await findSeedNodes(workspaceId, keywords);
-  cypherLog.push(`// Seed search: keywords=[${keywords.join(", ")}] → ${seeds.length} seed nodes`);
+  // Step 1: find seeds — full-text index hits merged with property matches
+  await ensureGraphIndexes(workspaceId);
+  const [propertySeeds, textHits] = await Promise.all([
+    findSeedNodes(workspaceId, keywords),
+    fullTextSeeds(workspaceId, keywords),
+  ]);
+  const merged = new Map(propertySeeds.map((s) => [s.id, s]));
+  for (const hit of textHits) {
+    const existing = merged.get(hit.id);
+    const boost = Math.round(hit.score * 3);
+    if (existing) existing.score += boost;
+    else merged.set(hit.id, { id: hit.id, label: hit.label, props: hit.props, score: boost, matchedTerms: ["full-text"] });
+  }
+  const seeds = [...merged.values()].sort((a, b) => b.score - a.score).slice(0, 8);
+  cypherLog.push(`// Seed search: keywords=[${keywords.join(", ")}] → ${propertySeeds.length} property + ${textHits.length} full-text hits → ${seeds.length} seeds`);
 
   if (seeds.length === 0) {
     return {
@@ -276,6 +289,34 @@ export async function graphRagAnswer(workspaceId: string, question: string): Pro
     if (truncated) break;
     addEvidenceLine("");
   }
+  // Step 2b: multi-hop context for the strongest seeds (code → commit → issue → discussion)
+  if (!truncated) {
+    const hopSeeds = seeds.slice(0, 3);
+    const hopResults = await Promise.all(hopSeeds.map((seed) => multiHopContext(workspaceId, seed.id)));
+    const hopLines = new Set<string>();
+    for (const paths of hopResults) {
+      for (const path of paths) hopLines.add(`- ${describePath(path, formatProps)}`);
+    }
+    cypherLog.push(`// Multi-hop (2..3) expansion for top ${hopSeeds.length} seeds → ${hopLines.size} paths`);
+    if (hopLines.size > 0 && addEvidenceLine("### Multi-hop context")) {
+      for (const line of hopLines) {
+        if (!addEvidenceLine(line)) { truncated = true; break; }
+        evidenceCount++;
+      }
+      addEvidenceLine("");
+    }
+  }
+
+  // Step 2c: how the top two seeds relate to each other
+  if (!truncated && seeds.length >= 2) {
+    const path = await connectingPath(workspaceId, seeds[0]!.id, seeds[1]!.id);
+    cypherLog.push(`// Connecting path ${seeds[0]!.label}#${seeds[0]!.id} ↔ ${seeds[1]!.label}#${seeds[1]!.id} → ${path ? path.rels.length + " hops" : "none"}`);
+    if (path && addEvidenceLine("### How the top results connect")) {
+      addEvidenceLine(`- ${describePath(path, formatProps)}`);
+      evidenceCount++;
+    }
+  }
+
   if (truncated) lines.push("\n[Graph evidence truncated to fit the context budget.]");
 
   // Step 3: Cypher for conflicts if the question seems conflict-related

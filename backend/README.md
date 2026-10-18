@@ -76,6 +76,33 @@ integration settings: when enabled, a commit that explicitly contains a Jira key
 `In Progress` if Jira exposes that transition. The handler checks the current status first and does not add
 automatic Jira comments.
 
+## GraphRAG on FalkorDB
+
+Retrieval (`packages/services/src/graph/rag.ts`, `graph/advanced.ts`) runs against the workspace's own FalkorDB graph:
+
+1. **Indexes:** range indexes on lookup keys (`Function.name`, `File.path`, `Commit.sha`, `Issue.key`, …) and
+   full-text indexes on commit messages, issue titles, discussions, decisions and chunks are created lazily per workspace.
+2. **Seeds:** property matches are merged with `db.idx.fulltext.queryNodes` hits and ranked.
+3. **Expansion:** 1-hop neighbours, then 2–3 hop paths to issues, decisions, discussions, people and tests
+   (e.g. `Function ← Commit → Issue ← SlackMessage`), plus the shortest bounded path linking the top two results.
+4. **Conflicts:** the resolver adds file ownership (commit counts per author), an ownership warning when an author
+   edits outside their usual area, and the impact radius (callers up to 2 `CALLS` hops away in other files).
+   `graph.fileInsight` exposes the same data for hover cards.
+5. **Commit → issue:** a push without an explicit Jira key gets up to three suggested issues (full-text + file history),
+   stored as `LIKELY_RELATES` edges and posted to Slack. Suggestions never transition tickets; only explicit keys do.
+
+Advanced queries run only on a live FalkorDB graph and fail independently, so a missing index or procedure
+degrades to basic retrieval instead of failing the request.
+
+## Deploying (Render)
+
+`render.yaml` at the repository root defines `stackfox-falkordb` (private service), `stackfox-api` and `stackfox-web`.
+Create a Blueprint from the repo, then fill the `sync: false` values: `DATABASE_URL` (Neon), `ENCRYPTION_KEY`
+(`openssl rand -hex 32`), `CLIENT_URL` (web URL), `API_PUBLIC_URL` and the web's `API_INTERNAL_URL` (API URL),
+Google OAuth values, and `OPENROUTER_API_KEY`. Copy the API's generated `JWT_SECRET` into the web service so both
+verify the same cookies. Update the Google OAuth redirect URI to `<web URL>/api-auth/google/callback`.
+GitHub, Jira and Slack credentials are entered per workspace under **Integrations** after sign-in.
+
 ## Shared deployed services
 
 Workspace owners and admins can register an HTTPS API origin under **Workspace → Shared Services**. The service

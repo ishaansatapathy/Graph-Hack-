@@ -1,6 +1,7 @@
 import type { GithubPushPayload } from "../github/push-schema";
 import { extractJiraKeys, summarizePush } from "../github/push-schema";
 import { notifyNewConflicts } from "../conflict/notify";
+import { type IssueSuggestion, suggestIssuesForCommit } from "../graph/advanced";
 import { upsertChunks } from "../graph/chunks";
 import { graphWrite } from "../graph/falkordb";
 import { redactSecrets } from "../graph/redact";
@@ -200,6 +201,7 @@ export async function handleGithubPush(workspaceId: string, payload: GithubPushP
   }
 
   let filesIngested = 0;
+  const suggestedIssues = new Map<string, IssueSuggestion>();
   try {
     const commitsToIngest = webhookCommits.length > 0
       ? webhookCommits.map((commit) => ({
@@ -231,6 +233,11 @@ export async function handleGithubPush(workspaceId: string, payload: GithubPushP
         jiraKeys: commitJiraKeys,
       }, githubConfig?.personalAccessToken);
       filesIngested += files.length;
+      if (commitJiraKeys.length === 0 && suggestedIssues.size < 3) {
+        const suggestions = await suggestIssuesForCommit(workspaceId, { sha: commit.sha, message: commit.message, files })
+          .catch(() => []);
+        for (const s of suggestions) suggestedIssues.set(s.key, s);
+      }
       if (remainingFiles === 0) break;
     }
   } catch (error) {
@@ -258,7 +265,11 @@ export async function handleGithubPush(workspaceId: string, payload: GithubPushP
     .map(([key]) => key);
   const slackLine = `*${summary.repo}* \`${summary.sha}\` on \`${summary.branch}\` - ${summary.message}${
     jiraKeys.length ? ` (Jira: ${jiraKeys.join(", ")})` : ""
-  }${movedIssues.length ? ` - moved to In Progress: ${movedIssues.join(", ")}` : ""}`;
+  }${movedIssues.length ? ` - moved to In Progress: ${movedIssues.join(", ")}` : ""}${
+    suggestedIssues.size
+      ? `\nLikely related (GraphRAG, not moved): ${[...suggestedIssues.values()].map((s) => `${s.key} ${s.title}`.trim()).join("; ")}`
+      : ""
+  }`;
 
   await postSlack(workspaceId, slackLine).catch((error) => {
     console.warn("[slack] push notification failed", error instanceof Error ? error.message : error);
@@ -274,6 +285,7 @@ export async function handleGithubPush(workspaceId: string, payload: GithubPushP
     filesIngested,
     jiraKeys,
     jiraTransitions: transitionResults,
+    suggestedIssues: [...suggestedIssues.values()],
     webhookRegistered: Boolean(githubConfig?.repositoryFullName),
   };
 }

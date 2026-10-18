@@ -1,0 +1,84 @@
+# Render blueprint: API + workspace web app + private FalkorDB.
+# Values marked `sync: false` are entered in the Render dashboard on first deploy.
+services:
+  - type: pserv
+    name: stackfox-falkordb
+    runtime: image
+    image:
+      url: docker.io/falkordb/falkordb:latest
+    disk:
+      name: falkordb-data
+      mountPath: /data
+      sizeGB: 1
+
+  - type: web
+    name: stackfox-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci && npm run db:migrate
+    startCommand: npm run start:api
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEV_LOGIN_ENABLED
+        value: "false"
+      - key: FALKORDB_HOST
+        fromService: { type: pserv, name: stackfox-falkordb, property: host }
+      - key: FALKORDB_PORT
+        value: "6379"
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: FP_SALT
+        generateValue: true
+      - key: CLIENT_URL
+        sync: false
+      - key: API_PUBLIC_URL
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+
+  - type: web
+    name: stackfox-web
+    runtime: node
+    rootDir: backend
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start:web
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Full origin of stackfox-api, e.g. https://stackfox-api.onrender.com
+      - key: API_INTERNAL_URL
+        sync: false
+      - key: CLIENT_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REDIRECT_URI
+        sync: false

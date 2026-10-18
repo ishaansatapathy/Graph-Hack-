@@ -182,6 +182,7 @@ export default function ConflictsPage() {
             {openConflicts.map((c) => (
               <ConflictCard
                 key={c.id}
+                workspaceId={workspaceId}
                 conflict={c}
                 resolution={resolutions.get(c.id)}
                 resolving={resolving === c.id}
@@ -196,25 +197,88 @@ export default function ConflictsPage() {
   );
 }
 
+type FileInsight = {
+  owners: { author: string; commits: number }[];
+  impact: { caller: string; file: string }[];
+  issues: { key: string; title: string; status: string }[];
+  primaryOwner: string | null;
+};
+
+function insightSummary(insight: FileInsight | null) {
+  if (!insight) return "Loading graph context…";
+  const parts = [
+    insight.primaryOwner ? `Owner: ${insight.primaryOwner}` : "No ownership history",
+    insight.issues.length ? `Issues: ${insight.issues.map((i) => i.key).join(", ")}` : "",
+    insight.impact.length ? `${insight.impact.length} dependent caller(s) in other files` : "",
+  ];
+  return parts.filter(Boolean).join(" · ");
+}
+
+function GraphInsight({ conflict: c, insight }: { conflict: Conflict; insight: FileInsight | null }) {
+  if (!insight) return null;
+  const outsiders = [c.authorA, c.authorB].filter((author) => {
+    const primary = insight.owners[0];
+    if (!primary || author === primary.author) return false;
+    const share = insight.owners.find((o) => o.author === author)?.commits ?? 0;
+    return share * 3 < primary.commits;
+  });
+  if (!insight.owners.length && !insight.impact.length && !insight.issues.length) return null;
+
+  return (
+    <div className="app-conflict-resolution">
+      <div className="app-conflict-resolution-header">
+        <span className="app-pill app-pill--on">Graph context · FalkorDB</span>
+      </div>
+      {outsiders.map((author) => (
+        <p key={author} className="app-muted" style={{ color: "var(--err, #f87171)" }}>
+          ⚠ @{author} is outside their usual area here; @{insight.primaryOwner} owns this file and should review that change.
+        </p>
+      ))}
+      {insight.owners.length ? (
+        <p className="app-muted">Owners: {insight.owners.map((o) => `@${o.author} (${o.commits})`).join(", ")}</p>
+      ) : null}
+      {insight.issues.length ? (
+        <p className="app-muted">Linked issues: {insight.issues.map((i) => `${i.key} ${i.title}${i.status ? ` [${i.status}]` : ""}`).join(" · ")}</p>
+      ) : null}
+      {insight.impact.length ? (
+        <p className="app-muted">Re-test callers: {insight.impact.map((i) => `${i.caller} (${i.file})`).join(", ")}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function ConflictCard({
+  workspaceId,
   conflict: c,
   resolution,
   resolving,
   onResolve,
 }: {
+  workspaceId: string | null;
   conflict: Conflict;
   resolution?: Resolution;
   resolving: boolean;
   onResolve: () => void;
 }) {
   const [expanded, setExpanded] = useState(true);
+  const [insight, setInsight] = useState<FileInsight | null>(null);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    let cancelled = false;
+    void trpc.graph.fileInsight
+      .query({ workspaceId, file: c.file })
+      .then((result) => { if (!cancelled && result) setInsight(result); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [workspaceId, c.file]);
 
   return (
     <article className="app-conflict-card">
       <div className="app-conflict-card-head">
         <div className="app-conflict-file">
           <span className="conflict-tag-icon">⚡</span>
-          <code>{c.file}</code>
+          <code title={insightSummary(insight)} style={{ cursor: "help" }}>{c.file}</code>
           <span className="app-pill app-pill--err">POSSIBLE OVERLAP</span>
         </div>
         <div className="app-conflict-actions">
@@ -275,6 +339,8 @@ function ConflictCard({
           {c.patchB ? <><strong>Branch B diff excerpt</strong><pre className="app-cypher">{c.patchB}</pre></> : null}
         </div>
       ) : null}
+
+      <GraphInsight conflict={c} insight={insight} />
 
       {resolution ? (
         <div className="app-conflict-resolution">
