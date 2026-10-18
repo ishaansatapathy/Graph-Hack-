@@ -16,6 +16,7 @@ Stackfox imports a GitHub repository's branches, writes every pending change, fi
 
 ## Contents
 
+1. [Using the platform](#using-the-platform)
 1. [What it does](#what-it-does)
 2. [Architecture](#architecture)
 3. [The graph](#the-graph)
@@ -28,6 +29,86 @@ Stackfox imports a GitHub repository's branches, writes every pending change, fi
 10. [Project layout](#project-layout)
 11. [Security](#security)
 12. [Limitations](#limitations)
+
+---
+
+## Using the platform
+
+A walkthrough of the live demo at **[graph-hack-1.onrender.com](https://graph-hack-1.onrender.com/)**. It runs on Render's free tier, so the first request after a quiet period can take about 50 seconds.
+
+### 1. Sign in
+
+1. Open [graph-hack-1.onrender.com/signin](https://graph-hack-1.onrender.com/signin). Use a normal browser tab; links opened inside Gmail or WhatsApp sometimes switch browsers mid-login and lose the session.
+2. Click **Continue with Google SSO** or **Continue with GitHub**.
+3. You land in the **Studio**. A workspace (`ws_<id>` in FalkorDB) is created for you on first sign-in.
+
+Use the same method every time. An email that signed up with Google cannot sign in with GitHub, and the other way round.
+
+### 2. Import a repository into the graph
+
+1. In the **Studio** tab, type a public repository into the `owner/repo` box at the top right, for example `expressjs/express`.
+2. Click **Import**.
+3. Watch the event log: Stackfox lists the branches, compares each with the default branch, and writes `Change`, `File`, `Issue` and `Conflict` nodes into FalkorDB. Nodes appear on the canvas as they are written.
+4. Click a node, or a conflict, to see the **Evidence** path and the **Code** diff in the inspector on the right.
+
+A repository with several active branches gives the most interesting graph. Private repositories need a GitHub token (step 4).
+
+### 3. Invite a teammate
+
+1. Open the **Workspace** tab.
+2. Under **Invite a teammate**, enter their email, pick **Member** or **Admin**, and click **Send invite**. Only owners and admins can invite.
+3. Your teammate opens [the sign-in page](https://graph-hack-1.onrender.com/signin) and signs in **with the invited email**. The invitation is accepted automatically and they join your workspace.
+
+Invitation emails are sent through Resend. With the default test sender they only reach the account owner, so for a demo just send your teammate the sign-in link. The Workspace tab also shows members, pending invitations, AI usage and FalkorDB/Postgres status.
+
+### 4. Connect GitHub, Jira and Slack
+
+Open **Integrations**. For each provider, fill the fields, click **Connect**, then **Test**.
+
+| Provider | Fields | Used for |
+|---|---|---|
+| GitHub | **Repository** (`owner/repo`), **Personal access token** | Browsing and committing in the IDE, opening pull requests, private-repo imports |
+| Jira | **Jira site** (`https://your-team.atlassian.net`), **Account email**, **API token** | **Sync now** pulls issues into the graph as `Issue` nodes |
+| Slack | **Incoming webhook URL** (`https://hooks.slack.com/…`) | Posting push summaries to a channel |
+
+- GitHub token: GitHub → Settings → Developer settings → Personal access tokens. A classic token with the `repo` scope is enough for the IDE.
+- Jira API token: [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
+- Slack: create an app with **Incoming Webhooks** enabled and copy the webhook for your channel.
+
+Credentials are encrypted before they are stored and are never shown again. **Sync runs** and **Audit log** at the bottom show what ran and who changed what.
+
+> **Known gap:** connecting GitHub from the studio does not register a push webhook yet, so the push → graph → Slack/Jira automation described below does not run from this UI. Imports, the IDE and Jira sync work.
+
+### 5. Work in the IDE
+
+1. Open **IDE** (it needs GitHub connected).
+2. Pick a branch, filter files, open one, and edit it.
+3. **Save draft** shares your unsaved edit with the workspace.
+4. Enter a commit message and click **Commit**. Commits go to your own `stackfox/user-<id>` branch; the server refuses writes to the default branch or anyone else's branch.
+5. Click **Open pull request** to send your branch for normal GitHub review.
+6. The Cypher box at the bottom runs read-only queries on your workspace graph. Try:
+   ```cypher
+   MATCH (c:Change)-[:MODIFIES]->(f:File)<-[:MODIFIES]-(o:Change) WHERE c <> o
+   RETURN f.path AS file, collect(DISTINCT c.branch) AS branches LIMIT 10
+   ```
+
+### 6. Share an API with the team
+
+1. Open **API Vault**.
+2. Under **Share an API**, fill **Name**, **Base URL (HTTPS origin)** and an optional **Bearer token**, then click **Share with workspace**.
+3. Any member can now pick the service, choose the method, type a path such as `/v1/status`, add a body if needed, and click **Call through Stackfox**. The token is added on the server, so nobody else sees it.
+
+Only public HTTPS addresses are allowed, and requests do not follow redirects.
+
+### 7. Review conflicts
+
+1. Open **Conflicts** after an import that found overlapping branches.
+2. Each card shows both sides' branch, author and commit, and the overlapping lines when GitHub diffs are available.
+3. Click **Review with AI** for a short review built from graph evidence (linked issues, decisions, ownership, callers to re-test). It is advice only: nothing is changed, merged or tested.
+
+### 8. Sign out
+
+Use the sign-out icon at the right of the top bar.
 
 ---
 
