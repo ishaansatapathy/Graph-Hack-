@@ -126,6 +126,10 @@ export function TopBar({
       )}
 
       <div className="ml-auto flex items-center gap-3">
+        <Button size="sm" variant="ghost" onClick={signOut} disabled={signingOut} title="Sign out" className="font-mono text-[11.5px] text-fg-2" aria-label="Sign out">
+          {signingOut ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} strokeWidth={2} />}
+          <span className="hidden 2xl:inline">Sign out</span>
+        </Button>
         {activeTab === "studio" ? (
           <>
             <StreamBadge stream={stream} />
@@ -179,10 +183,6 @@ export function TopBar({
             ← Back to Graph Studio
           </Button>
         )}
-        <Button size="sm" variant="ghost" onClick={signOut} disabled={signingOut} className="font-mono text-[11.5px] text-fg-2" aria-label="Sign out">
-          {signingOut ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} strokeWidth={2} />}
-          Sign out
-        </Button>
       </div>
     </header>
   );
