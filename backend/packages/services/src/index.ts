@@ -1,4 +1,4 @@
-export { env, getGoogleOAuthConfig, isGoogleOAuthConfigured } from "./env";
+export { env, getGoogleOAuthConfig, isGoogleOAuthConfigured, getGithubOAuthConfig, isGithubOAuthConfigured } from "./env";
 export { default as AuthService } from "./auth";
 export { default as UserService } from "./user";
 export { AuthError, toAuthError } from "./auth/errors";
@@ -44,6 +44,9 @@ export {
 } from "./ai/router";
 export { checkDeviceQuota, getDeviceUsage } from "./ai/fingerprint";
 
+// ── Live dashboard ────────────────────────────────────────────────────────
+export * as live from "./live";
+
 // ── Conflict ──────────────────────────────────────────────────────────────
 export { notifyNewConflicts } from "./conflict/notify";
 export { detectConflicts, type ConflictRecord } from "./conflict/detect";
@@ -66,6 +69,7 @@ export { reserveApiKeyRequest } from "./db";
 export {
   listGithubRepositoryFiles,
   listGithubRepositoryBranches,
+  workspaceEditBranchName,
   ensureGithubEditBranch,
   readGithubRepositoryFile,
   saveGithubRepositoryFile,
