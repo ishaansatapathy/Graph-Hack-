@@ -116,7 +116,7 @@ function EvidenceTab({ evidence, nodes, onSelectNode }: { evidence: EvidencePath
       <EmptyState
         icon={<Route size={16} strokeWidth={1.5} />}
         title="No conflict traced yet"
-        body="When two pending changes collide, SYNK runs evidence_path and shows the shortest chain that explains why."
+        body="When two pending changes collide, Stackfox runs evidence_path and shows the shortest chain that explains why."
       />
     );
   const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -260,7 +260,7 @@ function FixTab({ fix, tests, agents, onOpenCode }: { fix: FixProposal | null; t
       <EmptyState
         icon={<Wrench size={16} strokeWidth={1.5} />}
         title="No fix proposed yet"
-        body="Once the failure is traced, SYNK proposes the smallest patch on the lower-centrality side and re-runs the same tests."
+        body="Once the failure is traced, Stackfox proposes the smallest patch on the lower-centrality side and re-runs the same tests."
       />
     );
   const agent = agents.find((a) => a.id === fix.agentId);
