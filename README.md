@@ -68,12 +68,14 @@ Open **Integrations**. For each provider, fill the fields, click **Connect**, th
 | Provider | Fields | Used for |
 |---|---|---|
 | GitHub | **Repository** (`owner/repo`), **Personal access token** | Browsing and committing in the IDE, opening pull requests, private-repo imports |
-| Jira | **Jira site** (`https://your-team.atlassian.net`), **Account email**, **API token** | **Sync now** pulls issues into the graph as `Issue` nodes |
-| Slack | **Incoming webhook URL** (`https://hooks.slack.com/…`) | Posting push summaries to a channel |
+| Jira | **Jira site** (`https://your-team.atlassian.net`), **Account email**, **API token** | **Sync now** pulls issues into the graph as `Issue` nodes. Tick **Move an issue to In Progress…** so a pushed commit that mentions a key (`SF-12`) moves that issue |
+| Slack | **Incoming webhook URL** (`https://hooks.slack.com/…`), optional **Bot token** (`xoxb-…`) and **Workspace slug** | Posting push summaries; with a bot token, **Sync now** also reads public channels |
 
 - GitHub token: GitHub → Settings → Developer settings → Personal access tokens. A classic token with the `repo` scope is enough for the IDE. Add `admin:repo_hook` (or, for a fine-grained token, **Webhooks: Read and write**) so Stackfox can register the push webhook.
 - Jira API token: [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
-- Slack: create an app with **Incoming Webhooks** enabled and copy the webhook for your channel.
+- Slack: create an app with **Incoming Webhooks** enabled and copy the webhook for your channel. To let Stackfox read channels, add the bot scopes `channels:read` and `channels:history`, install the app, invite it to the channels, and paste the **Bot User OAuth Token**.
+
+**Conversation → code.** After a Jira or Slack sync, any issue or message that names a file (`lib/request.js`) or a function (`verifyToken()`, `` `send` ``) in the graph is linked to it. Text that reads like a decision ("we decided…", "from now on…"), or a Jira issue labelled `decision` or `adr`, also becomes a `Decision` node. Conflict reviews and the conflict cards then show those decisions and discussions next to the code they concern. The sync run line in **Sync runs** says how many items were linked.
 
 Credentials are encrypted before they are stored and are never shown again. **Sync runs** and **Audit log** at the bottom show what ran and who changed what.
 
@@ -197,7 +199,8 @@ flowchart LR
 | `Label` | `name` | Jira sync |
 | `Chunk` | `text`, `index` | GraphRAG chunking of commits and issues (no vector store) |
 | `Function` | `name`, `file`, `signature`, `line` | importer — JS/TS/Python definitions in the files it fetches for conflicts, linked by `File -[:DEFINES]->` and `-[:CALLS]->` |
-| `Decision`, `Discussion` | `title`, `rationale` / `text`, `channel` | Read by retrieval and the conflict reviewer. No sync writes them yet (see [Limitations](#limitations)). |
+| `Discussion` | `id`, `text`, `author`, `channel`, `url` | Slack sync — a message that names a file or function; `-[:CONCERNS]->` that code and `-[:FROM]->` the `SlackMessage` |
+| `Decision` | `id`, `title`, `rationale`, `status`, `source` | Slack and Jira sync — decision-like text or a `decision`/`adr` label; `-[:CONSTRAINS]->` the code it names |
 
 ### Relationships
 
@@ -218,6 +221,10 @@ graph LR
   Conflict -->|BETWEEN| Change
   Issue -->|ASSIGNED_TO| Person
   Issue -->|HAS_LABEL| Label
+  Issue -->|CONCERNS| Function
+  Discussion -->|CONCERNS| Function
+  Discussion -->|FROM| SlackMessage
+  Decision -->|CONSTRAINS| Function
   SlackMessage -->|POSTED_IN| SlackChannel
   SlackMessage -->|MENTIONS| Issue
   Commit -->|HAS_CHUNK| Chunk
@@ -536,7 +543,7 @@ frontend/
 - Conflicts are **file-level** for imported branches; line-level overlap is computed for pushed commits when GitHub diffs are available. Stackfox flags risk — it does not run a Git merge.
 - The importer compares up to 8 branches and 60 files per side per import.
 - AI review is advice only; it never edits, merges or runs tests.
-- `Decision` and `Discussion` nodes are read by the conflict reviewer but not yet produced by any sync, so reviews of imported branches usually report no graph context.
+- `Decision` and `Discussion` nodes come from text matching, not understanding: a message is linked only when it names a file or function that is already in the graph, and "decision" is detected from phrases and labels. Slack reading needs a bot token; without one, Slack only receives push summaries.
 - GraphRAG answers come from the Studio's **Ask the graph** box (`POST /api/graph/ask`) and the tRPC `graph.ask` procedure; both run the same code.
 - Retrieval is full-text plus graph traversal. There are no embeddings or vector search.
 - Co-editing in the IDE is draft sharing with polling (about every 2.5 seconds), not live cursors or a CRDT.
