@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
-import { Download, Loader2, RotateCcw } from "lucide-react";
+import { Download, Loader2, LogOut, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/ui/logo";
 import { cn } from "@/lib/cn";
@@ -57,6 +57,14 @@ export function TopBar({
   const [draft, setDraft] = useState("");
   const [hint, setHint] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function signOut() {
+    setSigningOut(true);
+    await fetch("/api/auth/signout", { method: "POST" }).catch(() => null);
+    // Full navigation so no signed-in state survives in memory.
+    window.location.assign("/signin");
+  }
 
   return (
     <header className="relative z-10 flex h-12 items-center gap-3 border-b border-line bg-surface-1 px-4">
@@ -171,6 +179,10 @@ export function TopBar({
             ← Back to Graph Studio
           </Button>
         )}
+        <Button size="sm" variant="ghost" onClick={signOut} disabled={signingOut} className="font-mono text-[11.5px] text-fg-2" aria-label="Sign out">
+          {signingOut ? <Loader2 size={12} className="animate-spin" /> : <LogOut size={12} strokeWidth={2} />}
+          Sign out
+        </Button>
       </div>
     </header>
   );
